@@ -483,6 +483,20 @@ select {
   margin-left: auto;
 }
 
+/* 被锁定的视图按钮（例如扫描局域网后的「世界地图」） */
+.tool.is-disabled,
+.tool:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+.tool.is-disabled:hover,
+.tool:disabled:hover {
+  border-color: var(--line);
+  color: var(--text-mute);
+}
+
 /* ==================== 图例面板 ==================== */
 
 .legend-panel {
