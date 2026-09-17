@@ -885,9 +885,40 @@ select {
   background: var(--accent);
 }
 
+/* 未确认到达目标时的说明条（位于统计栏下方） */
+.trace-notice {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 14px;
+  max-width: min(760px, calc(100% - 32px));
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  background: rgba(69, 45, 8, 0.92);
+  color: #fde68a;
+  font-size: 12.5px;
+  line-height: 1.55;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.trace-notice b {
+  color: #fef3c7;
+}
+
 .dot-target {
   background: #f472b6;
   box-shadow: 0 0 6px #f472b6;
+}
+
+/* 未确认到达的目标：同色但用虚线环，表达"位置来自定位库而非探测确认" */
+.dot-target-unconfirmed {
+  background: #f472b6;
+  box-shadow: 0 0 6px #f472b6;
+  outline: 1.5px dashed #f472b6;
+  outline-offset: 2px;
+  opacity: 0.75;
 }
 
 .dot-timeout {
