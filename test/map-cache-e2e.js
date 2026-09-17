@@ -158,13 +158,14 @@ function getJSON(url, t = 8000) {
     }
     const worldInfo = JSON.parse(await evaluate(`JSON.stringify({
       generatedAt: window.NetScopeApp.renderer().world.generatedAt,
-      provinces: (window.NetScopeApp.renderer().world.provinces || []).length,
+      countries: window.NetScopeApp.renderer().world.countries.length,
       storedBuild: window.localStorage.getItem('netscope.worldmap.build'),
       hasReloadFn: typeof window.NetScopeApp.reloadWorldData === 'function',
       reloadButton: Boolean(document.getElementById('btn-reload-map')),
     })`));
     console.log('  页面内的地图数据: ' + JSON.stringify(worldInfo));
-    if (worldInfo.provinces < 500) failures.push(`浏览器：加载到的地图数据缺少分区边界（${worldInfo.provinces}）`);
+    // 默认样式为"按国家划分"：国家数据必须有，行政区划线默认为 0
+    if (worldInfo.countries < 100) failures.push(`浏览器：加载到的地图数据国家数异常（${worldInfo.countries}）`);
     if (worldInfo.storedBuild !== worldInfo.generatedAt) failures.push('浏览器：未记录地图构建版本（无法做版本化请求）');
     if (!worldInfo.hasReloadFn) failures.push('浏览器：缺少 reloadWorldData 接口');
     if (!worldInfo.reloadButton) failures.push('浏览器：缺少「重新下载地图数据」按钮');
