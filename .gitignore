@@ -26,3 +26,6 @@ npm-debug.log*
 yarn-error.log*
 tmp-*
 *.tmp
+.git-commit-message.txt
+publish.log
+publish-dryrun.log

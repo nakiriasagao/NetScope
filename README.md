@@ -23,8 +23,16 @@
 ### 启动
 
 ```powershell
-cd D:\DSH\NetScope
+git clone https://github.com/nakiriasagao/webtraceor.git
+cd webtraceor
 node src/server.js
+```
+
+仓库中已包含预投影好的世界地图数据（`public/data/world-110m.json`），**克隆后即可直接运行**。
+如需重新生成地图数据（例如想换分辨率或更新国界）：
+
+```powershell
+node tools/build-world-map.js
 ```
 
 看到下面的横幅即成功：
@@ -257,9 +265,13 @@ node test/run-tests.js            # 单元测试 + 接口冒烟测试（自动�
 node --test test/unit.test.js     # 仅单元测试（100 个用例，约 0.2 秒）
 node test/smoke-api.js            # 仅接口冒烟测试（需服务已启动）
 node test/browser-e2e.js          # 浏览器端到端测试（需 Chrome/Edge 与服务）
+node test/render-audit.js         # 地图渲染对抗性审计（需 Chrome/Edge 与服务）
+node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
 `test/browser-e2e.js` 会启动无头浏览器，真实加载页面、执行一次完整探测，并审计渲染结果（画布是否真的画出了陆地和连线、节点与表格数量、视图切换、缩放、命中测试、导出），同时收集所有 console 错误与未捕获异常，最后在 `data/screenshots/` 留下截图。
+
+`test/render-audit.js` 用合成数据做对抗性验证：中间跳点无法定位、全部跳点无法定位、跨洲极端纬度、视图越界平移/缩放、窄窗口布局、超长目标地址的统计栏布局，确保「连线不跨越未定位节点」「地图不会被拖出视野」等约束不被回归破坏。
 
 ---
 
