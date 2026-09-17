@@ -895,20 +895,31 @@ describe('sysinfo.parseIpconfig：Windows 中文 ipconfig /all', () => {
 });
 
 describe('sysinfo.parseArp', () => {
-  it('英文 arp -a：过滤 .255 / 255.255.255.255 / 0.0.0.0，MAC 归一化', () => {
+  it('英文 arp -a：过滤 .255 / 255.255.255.255 / 0.0.0.0 / 多播地址，MAC 归一化', () => {
     const rows = sysinfo.parseArp(ARP_EN);
-    assert.deepStrictEqual(rows.map((r) => r.ip), ['192.168.1.1', '192.168.1.50', '224.0.0.22']);
+    assert.deepStrictEqual(rows.map((r) => r.ip), ['192.168.1.1', '192.168.1.50']);
     assert.strictEqual(rows.some((r) => r.ip.endsWith('.255')), false);
     assert.strictEqual(rows.some((r) => r.ip === '255.255.255.255'), false);
     assert.strictEqual(rows.some((r) => r.ip === '0.0.0.0'), false);
     assert.strictEqual(rows[0].mac, 'AA:BB:CC:DD:EE:FF', '短横线 MAC 转为大写冒号形式');
     assert.strictEqual(rows[0].type, 'dynamic');
-    assert.strictEqual(rows[2].type, 'static');
+    assert.strictEqual(rows[1].type, 'dynamic');
+  });
+
+  it('多播组地址必须被过滤（224.0.0.0/4 不是设备，混入会画出不存在的节点）', () => {
+    const rows = sysinfo.parseArp(ARP_EN.concat('\n', ARP_CN));
+    const multicast = rows.filter((r) => {
+      const first = Number.parseInt(r.ip.split('.')[0], 10);
+      return first >= 224 && first <= 239;
+    });
+    assert.deepStrictEqual(multicast, [], '不应保留任何 224.0.0.0/4 的条目');
+    assert.strictEqual(rows.some((r) => r.ip === '224.0.0.22'), false, 'IGMP 组播地址应被过滤');
+    assert.strictEqual(rows.some((r) => r.ip === '239.255.255.250'), false, 'SSDP 组播地址应被过滤');
   });
 
   it('中文 arp -a：过滤规则与 MAC 归一化一致', () => {
     const rows = sysinfo.parseArp(ARP_CN);
-    assert.deepStrictEqual(rows.map((r) => r.ip), ['192.168.1.1', '192.168.1.50', '239.255.255.250']);
+    assert.deepStrictEqual(rows.map((r) => r.ip), ['192.168.1.1', '192.168.1.50']);
     assert.strictEqual(rows[0].mac, 'AA:BB:CC:DD:EE:FF');
   });
 
@@ -1197,9 +1208,11 @@ describe('缺陷修复回归', () => {
 
   it('parseArp 应把中文 “动态” 识别为 dynamic（BUG-7 回归）', () => {
     const rows = sysinfo.parseArp(ARP_CN);
+    // 注意：多播条目已被过滤，因此中文样本只剩两条真实设备
+    assert.strictEqual(rows.length, 2);
     assert.strictEqual(rows[0].type, 'dynamic');
     assert.strictEqual(rows[1].type, 'dynamic');
-    assert.strictEqual(rows[2].type, 'static');
+    assert.strictEqual(rows.every((r) => r.type === 'dynamic'), true);
   });
 });
 
