@@ -8,6 +8,8 @@ data/geoip-cache.json
 data/exports/
 data/screenshots/
 data/*.log
+# 高德地图密钥等本地配置（绝不入库）
+data/amap-config.json
 # 测试脚本若以相对路径运行，可能在此生成截图目录，一并忽略
 test/data/
 
