@@ -164,9 +164,21 @@ function parseTraceroute(output, options = {}) {
     respondedHops: responded.length,
     timeouts: hops.filter((h) => h.isTimeout).length,
     destinationIP: options.targetIP || finalIP,
-    reachedTarget: Boolean(
-      options.targetIP && finalIP && options.targetIP === finalIP,
-    ) || complete,
+    /**
+     * 是否真的到达了目标主机
+     *
+     * 注意：**不能把 complete 当成到达目标**。
+     * complete 只表示 traceroute/tracert 命令正常跑完（Windows 会打印「跟踪完成」），
+     * 它同样会在 30 跳全部超时、根本没摸到目标时置位。
+     * 两者混淆曾导致：轨迹其实断在广州骨干网，界面却把广州标成"最终目的地"。
+     */
+    reachedTarget: Boolean(options.targetIP && finalIP && options.targetIP === finalIP),
+    /** 命令是否正常结束（≠ 到达目标） */
+    commandCompleted: complete,
+    /** 最后一个**有响应**的节点（可能只是中间路由器） */
+    lastRespondedIP: finalIP,
+    /** 实际探测到的跳数（含超时跳） */
+    probedHops: hops.length,
     minRtt: rtts.length ? Math.min(...rtts) : null,
     maxRtt: rtts.length ? Math.max(...rtts) : null,
     avgRtt: rtts.length ? round1(rtts.reduce((a, b) => a + b, 0) / rtts.length) : null,
