@@ -177,6 +177,12 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 > 两者语义不兼容。因此切到逻辑拓扑时会**临时挂起**高德、改用内置引擎绘制，
 > 但**你的底图选择会被完整保留**——切回世界地图会自动恢复高德底图。
 
+> **两种拓扑的节点合并规则不同**：
+> - **世界地图**按地理坐标合并（同一城市的多个跳点显示为一个标记，避免标记重叠）；
+> - **逻辑拓扑**按「跳」展开（每一跳各一个节点，同城节点自动加 `#2`、`#3` 序号）。
+>
+> 否则"上海 6 跳"会被合并成一个点，逻辑拓扑看起来就像只有一条线。
+
 ### 地图交互
 
 | 操作 | 效果 |
@@ -403,6 +409,7 @@ node test/map-switch-e2e.js       # 底图切换与跳数标签验收
 node test/style-consistency-e2e.js # 图例完整性 + 两套底图样式一致性
 node test/lan-then-trace-e2e.js    # 扫描局域网后再探测的全流程回归
 node test/view-switch-basemap-e2e.js # 视图切换保持底图选择 + 绘制性能
+node test/topology-perf-e2e.js     # 两种拓扑的显示与分阶段性能采样
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
