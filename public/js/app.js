@@ -177,6 +177,7 @@
       statRtt: $('stat-rtt'),
       statCountries: $('stat-countries'),
       statDistance: $('stat-distance'),
+      traceNotice: $('trace-notice'),
       hopsTable: $('hops-table'),
       hopsCount: $('hops-count'),
       latencyChart: $('latency-chart'),
@@ -584,7 +585,7 @@
             drawCurrentTrace();
             if (renderer.options.animate) renderer.startAnimation();
           } else if (state.hops.length) {
-            view.setTrace(state.hops, { local: state.local, target: state.target });
+            view.setTrace(state.hops, buildTraceContext(true));
           }
           if (!opts.silent) toast('已切换到高德地图底图', 'ok');
           return view;
@@ -1195,7 +1196,7 @@
             // 先让内置引擎把模式切回地图，再交还给高德
             renderer.setMode('map');
             amapView.resume();
-            amapView.setTrace(state.hops, { local: state.local, target: state.target });
+            amapView.setTrace(state.hops, buildTraceContext(true));
           }
           return;
         }
@@ -1226,7 +1227,7 @@
       if (amapView) {
         // 高德视图：把当前覆盖物重新纳入视野
         if (state.lan && state.lan.topology) amapView.setLanTopology(state.lan.topology);
-        else if (state.hops.length) amapView.setTrace(state.hops, { local: state.local, target: state.target });
+        else if (state.hops.length) amapView.setTrace(state.hops, buildTraceContext(true));
         return;
       }
       if (state.lan && renderer.lanMode && state.lan.topology) {
@@ -1593,22 +1594,42 @@
     var amapActive = amapView && typeof amapView.isSuspended === 'function' && !amapView.isSuspended();
 
     if (amapActive) {
-      amapView.setTrace(state.hops, { local: state.local, target: state.target });
+      amapView.setTrace(state.hops, buildTraceContext(!graph));
       return;
     }
 
     // 逻辑拓扑按"跳"展开，不按地理坐标合并：
     // 否则"同一城市 6 跳"会被合并成 1 个点，逻辑拓扑看起来就像只有一条线
-    renderer.setTrace(state.hops, {
-      local: state.local,
-      target: state.target,
-      merge: !graph,
-    });
+    renderer.setTrace(state.hops, buildTraceContext(!graph));
 
     if (opts.fit === false) return;
     if (graph) renderer.layoutLogical();
     else renderer.fitToNodes();
     renderer.draw();
+  }
+
+  /**
+   * 构造传给渲染器的上下文
+   *
+   * 除了 local/target/merge，还要带上"是否确认到达目标"的信息：
+   * 轨迹可能断在中间骨干网（目标或运营商过滤探测报文），
+   * 此时**绝不能**把最后一个有响应的中间节点当成目的地
+   * （否则江苏的 IP 会被画成广州）。
+   */
+  function buildTraceContext(merge) {
+    var summary = state.trace && state.trace.summary ? state.trace.summary : null;
+    var destIP = (summary && summary.destinationIP)
+      || (state.target && (state.target.primaryIP || state.target.host))
+      || null;
+    var reached = summary ? summary.reachedTarget === true : true;
+    return {
+      local: state.local,
+      target: state.target,
+      merge: merge,
+      // 未确认到达时，用目标 IP 自己的定位把终点画在正确位置（并用虚线连接）
+      unreached: reached ? null : { destinationIP: destIP },
+      destinationGeo: destIP ? (state.geo && state.geo[destIP]) || null : null,
+    };
   }
 
   /** 把当前追踪数据绘制到"当前生效的底图"上（高德或内置引擎） */
@@ -1652,6 +1673,46 @@
     el.statRtt.textContent = stats.avgRtt !== null && stats.avgRtt !== undefined ? stats.avgRtt + ' ms' : '—';
     el.statCountries.textContent = stats.countries && stats.countries.length ? stats.countries.length + ' 个' : '—';
     el.statDistance.textContent = estimateSpan() + ' km';
+    renderTraceNotice();
+  }
+
+  /**
+   * 显示/隐藏"未确认到达目标"的说明条
+   *
+   * 背景：目标或运营商经常过滤探测报文（ICMP/UDP），轨迹会停在中途的骨干路由器上。
+   * 若不提示，用户会把那个中间节点误当成最终目的地
+   *（实际踩到的例子：江苏的 IP 被画成"广州"，因为最后响应的节点在广州）。
+   */
+  function renderTraceNotice() {
+    if (!el.traceNotice) return;
+    var trace = state.trace || {};
+    var summary = trace.summary || {};
+    var unreached = trace.unreached || null;
+    var hasHops = state.hops && state.hops.length > 0;
+
+    if (!hasHops || summary.reachedTarget === true || !summary.destinationIP) {
+      el.traceNotice.hidden = true;
+      el.traceNotice.innerHTML = '';
+      return;
+    }
+
+    var destIP = summary.destinationIP;
+    var lastIP = summary.lastRespondedIP || '—';
+    var lastGeo = state.geo && state.geo[lastIP];
+    var destGeo = state.geo && state.geo[destIP];
+    var lastWhere = lastGeo && lastGeo.city ? lastGeo.city : '';
+    var destWhere = destGeo && destGeo.city ? destGeo.city : '';
+
+    var html = '<b>未能确认到达目标</b>：探测在 '
+      + escapeHtml(lastIP) + (lastWhere ? '（' + escapeHtml(lastWhere) + '）' : '')
+      + ' 之后失去响应，共 ' + (summary.timeouts || 0) + ' 跳无回应。';
+    html += '<br>地图上的 <b>虚线</b> 与虚线环表示这一段出自 IP 定位库、<b>并非探测确认</b>。';
+    if (destWhere) {
+      html += '目标 ' + escapeHtml(destIP) + ' 的位置为 ' + escapeHtml(destWhere)
+        + '（该位置由 IP 定位服务提供，未经路由验证）。';
+    }
+    el.traceNotice.innerHTML = html;
+    el.traceNotice.hidden = false;
   }
 
   /** 粗略估算拓扑的地理跨度（首末节点大圆距离） */
