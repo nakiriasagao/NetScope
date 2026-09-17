@@ -356,6 +356,9 @@
         nodes.push(existing);
       }
       existing.hops.push(hop);
+      // 记录该节点是否就是目标主机（由服务端的 isDestination 标记决定，
+      // 不能用"最后一个有定位的节点"代替 —— 轨迹可能断在中间骨干网上）
+      if (hop.isDestination) existing.isDestination = true;
     });
 
     // 节点标签：优先城市，其次主机名，最后 IP
@@ -416,13 +419,71 @@
       }
     }
 
-    // 目标标记：落在最后一个"有定位"的节点上
+    // 目标标记
+    //
+    // 这里**必须区分两种情况**，否则会把中间路由器当成目的地：
+    //   A. 轨迹真的到达目标 → 目标节点就是含 isDestination 的那个节点；
+    //   B. 轨迹中途断了（目标/运营商过滤探测报文）→ 最后一个有响应的节点
+    //      只是"路过的骨干路由器"，绝不能再标成目标。
+    //
+    // 曾经的缺陷：无脑取 nodes 末位当目标，于是江苏的 IP 被画成"广州"。
+    var destinationNode = null;
     if (nodes.length) {
-      var last = nodes[nodes.length - 1];
-      last.isTarget = true;
-      if (last.kind !== 'start') last.kind = 'target';
+      for (var n = 0; n < nodes.length; n += 1) {
+        if (nodes[n].isDestination) { destinationNode = nodes[n]; break; }
+      }
+      // 未到达时：若已拿到目标 IP 的定位，就把终点补在**目标真实位置**上，
+      // 并用虚线连接，明确表示"这一段没有被探测确认"。
+      if (!destinationNode && ctx.unreached && isValidGeo(ctx.destinationGeo)) {
+        var dPoint = self.project(ctx.destinationGeo.lon, ctx.destinationGeo.lat);
+        destinationNode = {
+          kind: 'target',
+          geoKey: 'target@' + ctx.destinationGeo.lat.toFixed(2) + ',' + ctx.destinationGeo.lon.toFixed(2),
+          lat: ctx.destinationGeo.lat,
+          lon: ctx.destinationGeo.lon,
+          x: dPoint.x,
+          y: dPoint.y,
+          city: ctx.destinationGeo.city || null,
+          country: ctx.destinationGeo.country || null,
+          countryCode: ctx.destinationGeo.countryCode || null,
+          isp: ctx.destinationGeo.isp || null,
+          provider: ctx.destinationGeo.provider || null,
+          geoStatus: ctx.destinationGeo.status || 'public',
+          hops: [],
+          isUnconfirmedDestination: true,
+        };
+        // 已有的同坐标节点就直接复用，避免重叠成两个点
+        var reused = null;
+        for (var m = 0; m < nodes.length; m += 1) {
+          if (nodes[m].geoKey === destinationNode.geoKey) { reused = nodes[m]; break; }
+        }
+        if (reused) {
+          destinationNode = reused;
+          destinationNode.isUnconfirmedDestination = true;
+        } else {
+          nodes.push(destinationNode);
+        }
+      }
+      if (destinationNode) {
+        destinationNode.isTarget = true;
+        if (destinationNode.kind !== 'start') destinationNode.kind = 'target';
+      }
+      // 最后一个有响应的节点：不是目标时要显式标注，避免被误读成终点
+      var lastResponded = null;
+      for (var q = nodes.length - 1; q >= 0; q -= 1) {
+        if (nodes[q].hops && nodes[q].hops.length) { lastResponded = nodes[q]; break; }
+      }
+      if (lastResponded && !lastResponded.isTarget) {
+        lastResponded.isLastResponded = true;
+      }
       if (ctx.target && ctx.target.host) {
-        last.subtitle = (last.subtitle ? last.subtitle + ' · ' : '') + '目标 ' + (ctx.target.primaryIP || ctx.target.host);
+        var label = '目标 ' + (ctx.target.primaryIP || ctx.target.host);
+        if (destinationNode && destinationNode.isUnconfirmedDestination) {
+          destinationNode.subtitle = (destinationNode.subtitle ? destinationNode.subtitle + ' · ' : '')
+            + label + '（未确认到达）';
+        } else if (destinationNode) {
+          destinationNode.subtitle = (destinationNode.subtitle ? destinationNode.subtitle + ' · ' : '') + label;
+        }
       }
     }
 
@@ -447,9 +508,18 @@
     this.invalidateOverlay();
 
     // 连线：只连接"有序的、能定位的"节点，未定位跳点自然被跳过
+    // 注意 nodes 末尾可能是"未确认到达"的目标节点，需要连线标为虚线
     this.arcs = [];
     for (var k = 0; k < nodes.length - 1; k += 1) {
-      this.arcs.push({ from: nodes[k], to: nodes[k + 1], index: k, skipped: 0 });
+      var toNode = nodes[k + 1];
+      this.arcs.push({
+        from: nodes[k],
+        to: toNode,
+        index: k,
+        skipped: 0,
+        // 虚线：这一段没有被探测确认（目标未响应，位置来自 IP 定位库）
+        dashed: toNode.isUnconfirmedDestination === true,
+      });
     }
     // 标注每条连线之间被跳过（未定位）的跳点数量
     this.arcs.forEach(function (arc) {
@@ -1084,6 +1154,11 @@
       var active = self.selected && (self.selected === arc.from || self.selected === arc.to);
       var hovered = self.hovered && (self.hovered === arc.from || self.hovered === arc.to);
 
+      // 未确认到达的一段（目标不响应探测，位置来自 IP 定位库）用虚线表示，
+      // 让用户一眼看出"这一段不是探测出来的"
+      if (arc.dashed) ctx.setLineDash([6, 5]);
+      else ctx.setLineDash([]);
+
       // 外发光
       ctx.beginPath();
       ctx.moveTo(path.a.x, path.a.y);
@@ -1094,13 +1169,14 @@
       ctx.stroke();
 
       // 主线
-      ctx.globalAlpha = active ? 1 : 0.8;
+      ctx.globalAlpha = arc.dashed ? (active ? 0.7 : 0.45) : (active ? 1 : 0.8);
       ctx.lineWidth = active ? 2.6 : 1.7;
       ctx.strokeStyle = color;
       ctx.stroke();
 
       // 数据包流动画：延迟越高流动越慢，直观表达"慢在哪一段"
-      if (self.options.animate) {
+      // 未确认的一段不画流动包（没有实测延迟，画了会误导）
+      if (self.options.animate && !arc.dashed) {
         var latency = self.nodeLatency(arc.to);
         var duration = clamp(1.1 + (latency === null ? 0.7 : latency / 140), 1.1, 3.6);
         var packets = 2;
@@ -1138,6 +1214,7 @@
       }
       ctx.globalAlpha = 1;
     });
+    ctx.setLineDash([]);
     ctx.restore();
   };
 
@@ -1274,13 +1351,16 @@
       ctx.stroke();
 
       // 目标节点额外的同心环
+      // 未确认到达的目标用**虚线环**：位置来自 IP 定位库而非探测确认
       if (node.isTarget) {
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, radius + 4.5, 0, Math.PI * 2);
         ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.55;
+        ctx.globalAlpha = node.isUnconfirmedDestination ? 0.4 : 0.55;
         ctx.lineWidth = 1.2;
+        if (node.isUnconfirmedDestination) ctx.setLineDash([3, 3]);
         ctx.stroke();
+        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
       }
     });
