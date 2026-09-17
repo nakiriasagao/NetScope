@@ -1,8 +1,8 @@
 package com.netscope.app;
 
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -13,6 +13,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -20,47 +21,49 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.Toast;
+
+import com.netscope.app.core.NetApi;
+import com.netscope.app.core.NetHttpd;
+
+import java.util.Map;
 
 /**
- * NetScope Android 客户端主界面
+ * NetScope 手机端主界面
  *
- * 设计取舍：本项目是把一整套网络探测能力跑在电脑/服务器上的工具，
- * Android 端不做重复实现，而是一个**专用的 WebView 客户端**：
- *   · 首次启动让用户填写 NetScope 服务地址（例如 http://192.168.1.5:8787）；
- *   · 之后记住地址，直接加载；遇到连不上时给出可操作的提示；
- *   · 顶部提供返回 / 刷新 / 设置三个动作。
+ * **独立运行**：本应用在手机内部启动一个 HTTP 服务（NetHttpd + NetApi），
+ * 探测逻辑完全在本机执行（见 core/Probe.java），WebView 加载
+ * http://127.0.0.1:port/ ——因此**不需要电脑、不需要任何外部后端**。
  *
- * 这样 APK 体积小、无需在手机上重复实现 ICMP / 局域网扫描等能力，
- * 又能完整使用桌面端的所有功能（含高德底图、局域网拓扑等）。
+ * 前端页面与桌面版是同一套 public/ 资源（打包在 assets/web/），
+ * 所以界面与功能入口完全一致；手机端不具备的能力（如中间路由器 IP、
+ * TLS 证书链检查）会在界面上明确说明，而不是伪造数据。
  */
-public class MainActivity extends android.app.Activity {
+public class MainActivity extends Activity {
 
-    static final String PREFS = "netscope";
-    static final String KEY_SERVER = "server_url";
-    /** 电脑本机的 NetScope 默认端口；Android 模拟器用 10.0.2.2 访问宿主机 */
-    static final String DEFAULT_SERVER = "http://10.0.2.2:8787";
+    /** 手机端内置服务固定使用这个端口；被占用时会自动顺延 */
+    private static final int PREFERRED_PORT = 8787;
 
+    private NetHttpd server;
+    private NetApi api;
     private WebView webView;
     private ProgressBar progressBar;
-    private TextView errorView;
-    private Button retryButton;
     private LinearLayout errorPanel;
-    private FrameLayout rootLayout;
-    private String currentUrl;
-    private boolean pageFailed = false;
+    private TextView errorText;
+    private String baseUrl;
+    private volatile boolean pageFailed = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        getWindow().setFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        rootLayout = new FrameLayout(this);
-        rootLayout.setBackgroundColor(Color.parseColor("#0b1220"));
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#0b1220"));
 
         webView = new WebView(this);
         webView.setLayoutParams(new FrameLayout.LayoutParams(
@@ -76,59 +79,44 @@ public class MainActivity extends android.app.Activity {
 
         errorPanel = buildErrorPanel();
 
-        rootLayout.addView(webView);
-        rootLayout.addView(progressBar);
-        rootLayout.addView(errorPanel);
-        setContentView(rootLayout);
+        root.addView(webView);
+        root.addView(progressBar);
+        root.addView(errorPanel);
+        setContentView(root);
 
-        showWelcomeIfNeeded();
-        loadServer();
+        startLocalServer();
     }
 
-    /** 顶部工具栏（用代码构建，避免引入 AppCompat 依赖） */
-    @Override
-    public boolean onCreateOptionsMenu(Menu menu) {
-        menu.add(0, 1, 0, R_STRING_RELOAD);
-        menu.add(0, 2, 1, R_STRING_SETTINGS);
-        menu.add(0, 3, 2, R_STRING_HOME);
-        return true;
-    }
+    /** 启动手机内置后端并加载界面 */
+    private void startLocalServer() {
+        try {
+            final NetHttpd[] holder = new NetHttpd[1];
+            com.netscope.app.core.ServerInfo info = new com.netscope.app.core.ServerInfo() {
+                @Override
+                public int getPort() {
+                    return holder[0] == null ? PREFERRED_PORT : holder[0].getPort();
+                }
 
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case 1:
-                pageFailed = false;
-                hideError();
-                webView.reload();
-                return true;
-            case 2:
-                startActivity(new Intent(this, SettingsActivity.class));
-                return true;
-            case 3:
-                loadServer();
-                return true;
-            default:
-                return super.onOptionsItemSelected(item);
+                @Override
+                public long uptimeSec() {
+                    return holder[0] == null ? 0 : holder[0].uptimeSec();
+                }
+
+                @Override
+                public String startedAtIso() {
+                    return holder[0] == null ? "" : holder[0].startedAtIso();
+                }
+            };
+            api = new NetApi(info);
+            server = new NetHttpd(new AssetsProvider(this), api);
+            holder[0] = server;
+            server.start(PREFERRED_PORT);
+            baseUrl = "http://127.0.0.1:" + server.getPort();
+            webView.loadUrl(baseUrl + "/");
+        } catch (Throwable t) {
+            showError("内置服务启动失败：" + t.getMessage()
+                    + "\n\n请尝试重启应用；若问题依旧，请反馈该提示。");
         }
-    }
-
-    /** 首次启动时给一句说明，避免用户不知道要填什么 */
-    private void showWelcomeIfNeeded() {
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        if (sp.contains(KEY_SERVER)) return;
-        Toast.makeText(this,
-                "首次使用：请点右上角菜单 → 设置，填写电脑上 NetScope 的地址（如 http://192.168.1.5:8787）",
-                Toast.LENGTH_LONG).show();
-    }
-
-    private void loadServer() {
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String url = sp.getString(KEY_SERVER, DEFAULT_SERVER);
-        currentUrl = url;
-        pageFailed = false;
-        hideError();
-        webView.loadUrl(url);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -143,8 +131,8 @@ public class MainActivity extends android.app.Activity {
         s.setDisplayZoomControls(false);
         s.setSupportZoom(true);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
-        // NetScope 服务通常是 http://内网IP，允许混合内容以便加载高德底图
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            // 页面来自 http://127.0.0.1，加载高德 https 底图属混合内容
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         }
         view.setBackgroundColor(Color.parseColor("#0b1220"));
@@ -160,14 +148,12 @@ public class MainActivity extends android.app.Activity {
         view.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, String url) {
-                // 站内链接在 WebView 内打开，外部链接交给系统浏览器
-                if (url != null && currentUrl != null && url.startsWith(origin(currentUrl))) {
-                    return false;
-                }
+                if (url == null) return false;
+                if (baseUrl != null && url.startsWith(baseUrl)) return false;
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                 } catch (Exception ignored) {
-                    /* 没有可用浏览器就忽略 */
+                    /* 无可用浏览器 */
                 }
                 return true;
             }
@@ -175,14 +161,14 @@ public class MainActivity extends android.app.Activity {
             @Override
             public void onPageFinished(WebView v, String url) {
                 progressBar.setVisibility(View.GONE);
-                if (!pageFailed) hideError();
+                if (!pageFailed) errorPanel.setVisibility(View.GONE);
             }
 
             @Override
             public void onReceivedError(WebView v, WebResourceRequest request, WebResourceError error) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && request.isForMainFrame()) {
                     pageFailed = true;
-                    showError(String.valueOf(error.getDescription()));
+                    showError("界面加载失败：" + error.getDescription());
                 }
             }
 
@@ -190,22 +176,12 @@ public class MainActivity extends android.app.Activity {
             public void onReceivedError(WebView v, int errorCode, String description, String failingUrl) {
                 if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                     pageFailed = true;
-                    showError(description);
+                    showError("界面加载失败：" + description);
                 }
             }
         });
     }
 
-    private static String origin(String url) {
-        try {
-            Uri u = Uri.parse(url);
-            return u.getScheme() + "://" + u.getAuthority();
-        } catch (Exception e) {
-            return url;
-        }
-    }
-
-    /** 连不上时的提示面板：说明原因 + 一键重试 + 一键改地址 */
     private LinearLayout buildErrorPanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -213,68 +189,88 @@ public class MainActivity extends android.app.Activity {
         panel.setBackgroundColor(Color.parseColor("#0b1220"));
         panel.setPadding(48, 48, 48, 48);
         panel.setVisibility(View.GONE);
-        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        panel.setLayoutParams(params);
+        panel.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        errorView = new TextView(this);
-        errorView.setTextColor(Color.parseColor("#dbe9ff"));
-        errorView.setTextSize(15f);
-        errorView.setGravity(Gravity.CENTER);
-        panel.addView(errorView);
+        errorText = new TextView(this);
+        errorText.setTextColor(Color.parseColor("#dbe9ff"));
+        errorText.setTextSize(15f);
+        errorText.setGravity(Gravity.CENTER);
+        panel.addView(errorText);
 
-        retryButton = new Button(this);
-        retryButton.setText("重试");
-        retryButton.setOnClickListener(new View.OnClickListener() {
+        Button retry = new Button(this);
+        retry.setText("重试");
+        retry.setAllCaps(false);
+        retry.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                loadServer();
+                pageFailed = false;
+                errorPanel.setVisibility(View.GONE);
+                if (server != null && server.isRunning() && baseUrl != null) {
+                    webView.loadUrl(baseUrl + "/");
+                } else {
+                    startLocalServer();
+                }
             }
         });
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        btnParams.topMargin = 32;
-        retryButton.setLayoutParams(btnParams);
-        panel.addView(retryButton);
-
-        Button settingsButton = new Button(this);
-        settingsButton.setText("修改服务器地址");
-        settingsButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startActivity(new Intent(MainActivity.this, SettingsActivity.class));
-            }
-        });
-        panel.addView(settingsButton);
-
+        p.topMargin = 32;
+        retry.setLayoutParams(p);
+        panel.addView(retry);
         return panel;
     }
 
-    private void showError(String detail) {
+    private void showError(String message) {
         errorPanel.setVisibility(View.VISIBLE);
-        errorView.setText("无法连接到 NetScope 服务\n\n"
-                + "当前地址：" + currentUrl + "\n"
-                + (detail == null ? "" : "错误信息：" + detail + "\n")
-                + "\n请确认：\n"
-                + "1. 电脑上 NetScope 已启动；\n"
-                + "2. 手机与电脑在同一局域网；\n"
-                + "3. 电脑上启动时使用了 --host 0.0.0.0（允许局域网访问）；\n"
-                + "4. 地址端口与电脑上显示的一致。");
-    }
-
-    private void hideError() {
-        errorPanel.setVisibility(View.GONE);
+        errorText.setText(message);
     }
 
     @Override
-    protected void onResume() {
-        super.onResume();
-        // 从设置页返回时，如果地址变了就重新加载
-        SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
-        String url = sp.getString(KEY_SERVER, DEFAULT_SERVER);
-        if (currentUrl != null && !currentUrl.equals(url)) {
-            loadServer();
+    public boolean onCreateOptionsMenu(Menu menu) {
+        menu.add(0, 1, 0, "刷新");
+        menu.add(0, 2, 1, "自检");
+        menu.add(0, 3, 2, "关于");
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case 1:
+                if (baseUrl != null) webView.loadUrl(baseUrl + "/");
+                return true;
+            case 2:
+                if (baseUrl != null) webView.loadUrl(baseUrl + "/?selftest=1");
+                return true;
+            case 3:
+                showAbout();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
         }
+    }
+
+    /** 关于对话框：说明本机独立运行方式与能力边界 */
+    private void showAbout() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("NetScope 手机版 ").append(NetHttpd.VERSION).append("\n\n");
+        sb.append("本应用在手机内自带后端服务，探测全部在本机完成，")
+                .append("不需要电脑，也不需要联网到任何 NetScope 服务器。\n\n");
+        if (server != null) {
+            sb.append("内置服务：").append(baseUrl).append("\n");
+            sb.append("运行时长：").append(server.uptimeSec()).append(" 秒\n\n");
+        }
+        sb.append("可用能力：可达性探测、路由追踪（目标与跳数距离）、")
+                .append("端口扫描、DNS 解析、公网出口与地理定位、局域网设备发现。\n\n");
+        sb.append("平台限制：Android 无 root 时无法读取 ICMP 超时报文的来源地址，")
+                .append("因此无法显示中间路由器的 IP；TLS 证书链检查暂未实现。")
+                .append("需要完整逐跳拓扑时请使用桌面版 NetScope。");
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("关于 NetScope")
+                .setMessage(sb.toString())
+                .setPositiveButton("知道了", null)
+                .show();
     }
 
     @Override
@@ -286,8 +282,27 @@ public class MainActivity extends android.app.Activity {
         return super.onKeyDown(keyCode, event);
     }
 
-    // 用字符串常量避免额外的 strings 引用（菜单项标题）
-    private static final String R_STRING_RELOAD = "刷新";
-    private static final String R_STRING_SETTINGS = "设置";
-    private static final String R_STRING_HOME = "回到首页";
+    @Override
+    protected void onDestroy() {
+        // 退出应用时一并关闭内置服务，避免残留线程
+        if (server != null) {
+            server.stop();
+            server = null;
+        }
+        if (webView != null) {
+            webView.destroy();
+            webView = null;
+        }
+        super.onDestroy();
+    }
+
+    /** 供设置页读取当前服务地址 */
+    public static String serverBaseUrl() {
+        return null;
+    }
+
+    /** 预留：把高德凭据注入前端（当前由前端自身保存） */
+    Map<String, Object> amapCredentials() {
+        return api == null ? null : api.amapCredentials();
+    }
 }
