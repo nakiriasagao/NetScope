@@ -18,7 +18,7 @@ const requiredIds = [
   'field-scanrange', 'opt-scanports', 'opt-scanfrom', 'opt-scanto', 'opt-maxhops', 'opt-queries',
   'opt-timeout', 'opt-resolvenames', 'opt-engine', 'opt-color', 'opt-show-labels', 'opt-show-links',
   'opt-show-grid', 'opt-show-admin1', 'opt-animate', 'opt-night', 'val-maxhops', 'val-queries', 'val-timeout',
-  'btn-zoom-in', 'btn-zoom-out', 'btn-reset-view',
+  'btn-zoom-in', 'btn-zoom-out', 'btn-reset-view', 'btn-reload-map',
   // 高德地图与局域网扫描相关
   'opt-basemap', 'basemap-status', 'btn-lanscan', 'btn-settings', 'opt-deepscan',
   'settings-modal', 'settings-close', 'amap-key', 'amap-security', 'amap-enabled',
