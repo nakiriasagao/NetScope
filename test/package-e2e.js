@@ -98,6 +98,28 @@ function request(port, urlPath, timeoutMs) {
           ok(`exe 提供 ${label}`, false, error.message);
         }
       }
+
+      // 回归：runtime-config.js 必须反映**当前**监听地址，不能被磁盘上的陈旧副本覆盖。
+      // 曾经的缺陷：它被当成普通静态文件读取，打包进 dist/public 的那份把端口写死，
+      // 用户换端口启动后整个界面连不上后端。
+      try {
+        const res = await request(PORT, '/js/runtime-config.js');
+        const text = res.body.toString('utf8');
+        const m = /"apiBase"\s*:\s*"([^"]+)"/.exec(text);
+        const apiBase = m ? m[1] : '';
+        ok('runtime-config 指向当前端口（未被陈旧文件覆盖）',
+          apiBase === `http://127.0.0.1:${PORT}`, apiBase || '(未解析到 apiBase)');
+        ok('runtime-config 禁缓存',
+          /no-store/.test(String(res.headers['cache-control'] || '')),
+          String(res.headers['cache-control'] || '无'));
+      } catch (error) {
+        ok('runtime-config 指向当前端口（未被陈旧文件覆盖）', false, error.message);
+      }
+
+      // 磁盘上不应再留下这个生成物（避免被打包进 dist/）
+      ok('public/ 下无残留的 runtime-config.js',
+        !fs.existsSync(path.join(ROOT, 'public', 'js', 'runtime-config.js')));
+
       // 真实探测一次，确认核心功能在打包环境下可用
       try {
         const body = JSON.stringify({ target: '223.5.5.5', maxHops: 6, queries: 2, timeoutMs: 700 });
