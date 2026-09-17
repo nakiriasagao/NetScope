@@ -138,6 +138,15 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
   若只定位跳点，前端就没有目标坐标，画不出终点。
   （`startTraceTask` 里的 `geoIPs` 必须包含 `targetIP`。）
 - 私有地址由 `applyPrivateAnchor` 按公网出口落点，**只影响私有 IP**，公网不受影响。
+- **高德叠加层必须完整透传 context**。`AmapView.setTrace` 原先只传
+  `local/target/merge`，丢掉了 `unreached`/`destinationGeo`，导致内置地图有虚线、
+  高德没有（同一个渲染器，两套入口）。新增任何要传给渲染器的上下文字段时，
+  记得同时更新 `amap-overlay.js` 里的透传列表。
+
+> **调试陷阱**：改前端后若浏览器行为与源码不符，先确认 **8787 端口上跑的是谁**。
+> 遗留的 `dist\netscope.exe` 会占住 8787 并提供**打包时的旧代码**，
+> 于是源码改动完全看不到（本次就被它误导了一轮）。
+> 检查：`Get-NetTCPConnection -LocalPort 8787 -State Listen` 看进程名。
 
 ## 代码约定
 
