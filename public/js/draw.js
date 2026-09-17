@@ -88,6 +88,7 @@
       this.overlay.setAttribute('width', w);
       this.overlay.setAttribute('height', h);
     }
+    this.invalidateOverlay();
   };
 
   /** 让整幅世界地图刚好铺满画布 */
@@ -423,6 +424,7 @@
 
     this.nodes = nodes;
     this.unlocated = unlocated;
+    this.invalidateOverlay();
 
     // 连线：只连接"有序的、能定位的"节点，未定位跳点自然被跳过
     this.arcs = [];
@@ -466,6 +468,7 @@
 
     if (this.mode === 'graph') this.layoutLogical();
     else this.startAnimation();
+    this.invalidateOverlay();
     this.draw();
   };
 
@@ -572,6 +575,7 @@
     this.unlocated = [];
     this.lanMode = true;
     this.mode = 'graph';
+    this.invalidateOverlay();
     this.stats = {
       hopCount: devices.length,
       locatedCount: devices.length,
@@ -583,6 +587,7 @@
       lan: { subnet: topo.subnet || null, deviceCount: devices.length, byType: topo.byType || {} },
     };
     this.stopAnimation();
+    this.invalidateOverlay();
     this.draw();
   };
 
@@ -694,7 +699,8 @@
       ctx.clearRect(0, 0, this.width, this.height);
       if (this.options.showLinks) this.drawArcs(ctx, time);
       this.drawNodes(ctx, time);
-      if (this.overlay) this.drawOverlay();
+      // 标签层不必每帧重建（见 drawOverlay 的说明）
+      if (this.overlay && this.shouldRebuildOverlay(time)) this.drawOverlay();
       return;
     }
 
@@ -711,7 +717,42 @@
 
     if (this.options.showLinks) this.drawArcs(ctx, time);
     this.drawNodes(ctx, time);
-    if (this.overlay) this.drawOverlay();
+    if (this.overlay && this.shouldRebuildOverlay(time)) this.drawOverlay();
+  };
+
+  /**
+   * 是否需要重建 SVG 标签层
+   *
+   * 为什么需要这个判断：标签层是真实 DOM（每个节点一个 g/rect/text），
+   * 早期实现每帧都"清空 + 重建"，在 60fps 下相当于每秒上千次 DOM 操作，
+   * 逻辑拓扑视图会明显卡顿。
+   *
+   * 现在改为：
+   *   1. 悬停/选中变化、数据更新、尺寸变化时立即重建（保证交互不迟钝）；
+   *   2. 平移动画（数据包流动）期间按 100ms 节流，
+   *      既能让标签跟随地图平移，又不会每帧重建 DOM。
+   */
+  Renderer.prototype.shouldRebuildOverlay = function (time) {
+    if (this.overlayDirty) {
+      this.overlayDirty = false;
+      this.overlayLastBuild = time;
+      return true;
+    }
+    if (this.overlayLastBuild === undefined || this.overlayLastBuild === 0) {
+      this.overlayLastBuild = time;
+      return true;
+    }
+    var interval = this.mode === 'graph' ? 200 : 100;
+    if (time - this.overlayLastBuild >= interval) {
+      this.overlayLastBuild = time;
+      return true;
+    }
+    return false;
+  };
+
+  /** 标记标签层需要重建（悬停、选中、数据更新时调用） */
+  Renderer.prototype.invalidateOverlay = function () {
+    this.overlayDirty = true;
   };
 
   Renderer.prototype.drawMapBackground = function (ctx) {
@@ -1260,11 +1301,13 @@
   Renderer.prototype.setHovered = function (node) {
     if (this.hovered === node) return;
     this.hovered = node;
+    this.invalidateOverlay();
     this.draw();
   };
 
   Renderer.prototype.setSelected = function (node) {
     this.selected = node;
+    this.invalidateOverlay();
     this.draw();
   };
 
@@ -1273,6 +1316,7 @@
     this.mode = mode === 'graph' ? 'graph' : 'map';
     if (this.mode === 'graph') this.layoutLogical();
     else this.fitToContainer();
+    this.invalidateOverlay();
     this.draw();
   };
 
@@ -1283,6 +1327,7 @@
     });
     if (this.options.animate && this.mode === 'map') this.startAnimation();
     else this.stopAnimation();
+    this.invalidateOverlay();
     this.draw();
   };
 
