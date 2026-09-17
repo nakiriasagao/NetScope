@@ -183,12 +183,58 @@
             </select>
             <span class="basemap-status" id="basemap-status"></span>
           </div>
-          <div class="map-toolbar-group map-legend" id="map-legend">
-            <span class="legend-item"><i class="dot dot-start"></i>起点</span>
-            <span class="legend-item"><i class="dot dot-hop"></i>中间节点</span>
-            <span class="legend-item"><i class="dot dot-target"></i>目标</span>
-            <span class="legend-item"><i class="dot dot-timeout"></i>无响应</span>
-            <span class="legend-item legend-note" title="中间节点默认显示为本色蓝；只有时延或丢包明显异常时才变为黄色（丢包≥20%）或红色（丢包≥50%、时延>180ms）">异常跳转黄/红</span>
+          <div class="map-toolbar-group map-toolbar-right">
+            <button class="tool tool-text" id="btn-legend" title="展开/收起图例">图例说明</button>
+          </div>
+        </div>
+
+        <!-- ======================= 图例面板 ======================= -->
+        <div class="legend-panel" id="legend-panel">
+          <div class="legend-head">
+            <h4>图例说明</h4>
+            <button class="legend-close" id="legend-close" title="收起图例">×</button>
+          </div>
+
+          <div class="legend-section">
+            <div class="legend-title">节点颜色（表达角色）</div>
+            <ul class="legend-list">
+              <li><i class="dot dot-start"></i><span><b>绿色</b> · 起点 / 本机<span class="legend-sub">带呼吸光晕；本机与网关同址时会合并为「本机 / 接入点」</span></span></li>
+              <li><i class="dot dot-hop"></i><span><b>蓝色</b> · 中间节点（正常）<span class="legend-sub">路由途中的路由器 / 骨干设备，延迟与丢包都正常</span></span></li>
+              <li><i class="dot dot-target"></i><span><b>粉色</b> · 目标<span class="legend-sub">探测的终点，带一圈同心环标记</span></span></li>
+              <li><i class="dot dot-timeout"></i><span><b>灰色</b> · 完全无响应<span class="legend-sub">该跳三次探测都没有回应（显示为 * * *）</span></span></li>
+            </ul>
+          </div>
+
+          <div class="legend-section">
+            <div class="legend-title">节点颜色（中间节点的异常提示）</div>
+            <ul class="legend-list">
+              <li><i class="dot dot-mid"></i><span><b>黄色</b> · 轻微异常<span class="legend-sub">丢包 ≥ 20%</span></span></li>
+              <li><i class="dot dot-bad"></i><span><b>红色</b> · 明显异常<span class="legend-sub">丢包 ≥ 50%，或超时跳，或平均延迟 &gt; 180 ms</span></span></li>
+            </ul>
+            <p class="legend-note">
+              「超时跳」指该跳本身没有回包，但后面的跳能回应——说明它只是不响应探测，
+              链路本身是通的。红色更多时候表示<b>这一段慢或丢包</b>，而不是断网。
+            </p>
+          </div>
+
+          <div class="legend-section">
+            <div class="legend-title">连线</div>
+            <ul class="legend-list">
+              <li><span class="line-sample line-lat-good"></span><span><b>绿 / 黄 / 红</b> · 按延迟着色<span class="legend-sub">可在左侧「连线着色」切换为按跳数渐变、按丢包率或单色</span></span></li>
+              <li><span class="line-sample line-flow"></span><span><b>流动光点</b> · 数据包动画<span class="legend-sub">延迟越高流动越慢，直观表达「慢在哪一段」</span></span></li>
+              <li><span class="line-sample line-label">第 6 跳 · 12 ms</span><span><b>线上文字</b> · 跳数与延迟<span class="legend-sub">内置地图与高德地图都会显示</span></span></li>
+              <li><span class="line-sample line-gap"></span><span><b>虚线 / 空白</b> · 跳过的未定位跳点<span class="legend-sub">该跳没有地理位置，不参与连线（地图上表现为一段空白）</span></span></li>
+            </ul>
+          </div>
+
+          <div class="legend-section">
+            <div class="legend-title">局域网拓扑（点「扫描局域网设备」后）</div>
+            <ul class="legend-list">
+              <li><i class="dot dot-gateway"></i><span><b>黄色</b> · 网关 / 路由器<span class="legend-sub">星型拓扑的中心</span></span></li>
+              <li><i class="dot dot-self"></i><span><b>绿色</b> · 本机</span></li>
+              <li><i class="dot dot-internet"></i><span><b>粉色</b> · 互联网<span class="legend-sub">标注公网出口 IP</span></span></li>
+              <li><i class="dot dot-device"></i><span><b>蓝色系</b> · 同网段设备<span class="legend-sub">按类型区分：电脑、手机、打印机、NAS、摄像头、电视、IoT 等</span></span></li>
+            </ul>
           </div>
         </div>
 
@@ -196,6 +242,8 @@
           <!-- 高德地图专用容器：高德的 destroy() 会清空容器内容，
                因此必须与内置画布/标签层/统计栏分开，避免切回内置地图时被一起删掉 -->
           <div class="amap-host" id="amap-host" hidden></div>
+          <!-- 高德模式下在其上叠加"内置引擎同款"的拓扑绘制层 -->
+          <canvas class="overlay-canvas" id="overlay-canvas" hidden></canvas>
           <canvas id="map-canvas"></canvas>
           <svg id="node-overlay" class="node-overlay"></svg>
           <!-- 统计栏：左右两端对齐，中间自适应；地址再长也不会挤压右侧 KPI -->
@@ -359,7 +407,7 @@
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/draw.js"></script>
-    <script src="js/amap-map.js"></script>
+    <script src="js/amap-overlay.js"></script>
     <script src="js/export.js"></script>
     <script src="js/app.js"></script>
   </body>
