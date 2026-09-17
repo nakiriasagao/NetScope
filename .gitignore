@@ -32,5 +32,6 @@ tmp-*
 *.tmp
 .git-commit-message.txt
 commit-msg.txt
+verify-remote.js
 publish.log
 publish-dryrun.log
