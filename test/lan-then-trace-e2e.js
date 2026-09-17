@@ -179,14 +179,15 @@ function getJSON(url, t = 8000) {
       failures.push(`步骤3：逻辑拓扑视图下应画在内置画布，实际 ${sAmapKeep.rendererCanvasId}`);
     }
 
-    // 显式切到世界地图：此时高德才真正接管
+    // 局域网扫描后世界地图被锁定：此时点「世界地图」应无效，仍保持星型拓扑
     await evaluate("document.querySelector('[data-view=\\\"map\\\"]').click(); 'ok'");
     await new Promise((r) => setTimeout(r, 2500));
     const sAmap = JSON.parse(await evaluate(probeState));
-    report('切到世界地图后的高德模式', sAmap);
-    if (!sAmap.plain) failures.push('步骤3：世界地图视图下高德未启用叠加绘制');
-    if (sAmap.rendererCanvasId !== 'overlay-canvas') {
-      failures.push(`步骤3：世界地图下高德应画在叠加层，实际 ${sAmap.rendererCanvasId}`);
+    report('强行点世界地图后（应被锁定，仍为星型拓扑）', sAmap);
+    if (!sAmap.lanMode) failures.push('步骤3：局域网扫描后世界地图应被锁定（仍显示星型拓扑）');
+    if (sAmap.plain) failures.push('步骤3：锁定期间不应切换到高德叠加绘制');
+    if (sAmap.rendererCanvasId !== 'map-canvas') {
+      failures.push(`步骤3：锁定期间应画在内置画布，实际 ${sAmap.rendererCanvasId}`);
     }
 
     await evaluate("document.getElementById('opt-basemap').value = 'builtin'; document.getElementById('opt-basemap').dispatchEvent(new Event('change')); 'ok'");
@@ -199,6 +200,7 @@ function getJSON(url, t = 8000) {
     if (s3.overlayHidden !== true) failures.push('步骤3：叠加层未隐藏');
     if (s3.canvasHidden) failures.push('步骤3：内置画布仍被隐藏');
     if (s3.inkSamples < 20) failures.push(`步骤3：切回后画布没有内容（着墨 ${s3.inkSamples}）`);
+    if (!s3.lanMode) failures.push('步骤3：切底图后星型拓扑应保持');
 
     // 回到逻辑拓扑，供步骤 4 验证"再次探测后星型模式已退出"
     await evaluate("document.querySelector('[data-view=\\\"graph\\\"]').click(); 'ok'");
