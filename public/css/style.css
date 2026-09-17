@@ -497,6 +497,14 @@ select {
   color: var(--text-mute);
 }
 
+/* 占满整行的工具按钮（如「重新下载地图数据」） */
+.tool-block {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  text-align: center;
+}
+
 /* ==================== 图例面板 ==================== */
 
 .legend-panel {
