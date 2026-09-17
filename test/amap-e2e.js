@@ -145,22 +145,31 @@ function getJSON(url, t = 8000) {
 
   const audit = await evaluate(`JSON.stringify((function () {
     const app = window.NetScopeApp;
-    const container = document.querySelector('.amap-container');
-    const layers = document.querySelector('.amap-layers');
-    // 高德用 canvas / 背景图渲染瓦片，DOM 里不一定有 <img>；
+        // 高德用 canvas / 背景图渲染瓦片，DOM 里不一定有 <img>；
     // 因此直接对地图容器区域做像素抽样，判断是否真的画出了地图内容
     let inkRatio = 0;
     let coloredPixels = 0;
+    let canvasCount = 0;
+    const host = document.getElementById('amap-host');
     try {
-      const canvases = Array.from(document.querySelectorAll('.amap-container canvas'));
+      // 高德地图渲染在专用容器 #amap-host 内（用 canvas / 背景图绘制瓦片，DOM 里不一定有 <img>），
+      // 因此对容器内的 canvas 做像素抽样，判断是否真的画出了地图内容
+      const scope = host || document.querySelector('.amap-container') || document;
+      const canvases = Array.from(scope.querySelectorAll('canvas'));
+      canvasCount = canvases.length;
       let sampled = 0;
       let inked = 0;
       let colored = 0;
-      for (const cv of canvases.slice(0, 3)) {
-        const ctx = cv.getContext && cv.getContext('2d');
+      for (const cv of canvases.slice(0, 4)) {
+        let ctx = null;
+        try {
+          ctx = cv.getContext && cv.getContext('2d');
+        } catch (e) {
+          ctx = null;
+        }
         if (!ctx || !cv.width || !cv.height) continue;
-        const w = Math.min(cv.width, 400);
-        const h = Math.min(cv.height, 400);
+        const w = Math.min(cv.width, 420);
+        const h = Math.min(cv.height, 420);
         const data = ctx.getImageData(0, 0, w, h).data;
         for (let i = 0; i < data.length; i += 4 * 13) {
           sampled += 1;
@@ -178,10 +187,12 @@ function getJSON(url, t = 8000) {
     return {
       hasAMapNs: typeof window.AMap !== 'undefined',
       baseMap: app.state.baseMap,
-      amapContainer: Boolean(container),
-      layersNode: Boolean(layers),
-      canvasCount: document.querySelectorAll('.amap-container canvas').length,
-      tileRequestsOK: true,
+      // 注意：高德会把 amap-container 类直接加在传入的容器上（不新建子元素），
+      // 因此判据是"容器内已出现高德自己的图层结构"
+      amapHostHasClass: Boolean(host && host.classList.contains('amap-container')),
+      amapLayers: document.querySelectorAll('#amap-host .amap-layers').length,
+      amapHostChildren: host ? host.childElementCount : null,
+      canvasCount: canvasCount,
       inkRatio: Math.round(inkRatio * 1000) / 1000,
       coloredPixels: coloredPixels,
       labels: document.querySelectorAll('#node-overlay g').length,
@@ -194,7 +205,7 @@ function getJSON(url, t = 8000) {
   const a = JSON.parse(audit);
   console.log('\n=== 高德底图审计 ===');
   console.log('AMap 命名空间:', a.hasAMapNs, '| 当前底图:', a.baseMap, '| 状态:', a.status);
-  console.log('地图容器:', a.amapContainer, '| 图层节点:', a.layersNode, '| canvas 数:', a.canvasCount);
+  console.log('地图容器: 高德类=' + a.amapHostHasClass + ' 图层数=' + a.amapLayers + ' | canvas 数:', a.canvasCount);
   console.log('画布着墨比例:', a.inkRatio, '| 彩色像素样本:', a.coloredPixels, '| 内置画布已隐藏:', a.builtinCanvasHidden);
   console.log('标签层元素:', a.labels, '| 跳点数:', a.hops, '| 统计栏跳数:', a.statsHops);
   console.log('\namap.com 网络响应（最近 8 条）:');
@@ -204,16 +215,109 @@ function getJSON(url, t = 8000) {
   const outDir = path.join(__dirname, '..', 'data', 'screenshots');
   fs.mkdirSync(outDir, { recursive: true });
   const shot = await send('Page.captureScreenshot', { format: 'png' });
-  fs.writeFileSync(path.join(outDir, 'amap-basemap.png'), Buffer.from(shot.data, 'base64'));
+  const shotBuffer = Buffer.from(shot.data, 'base64');
+  fs.writeFileSync(path.join(outDir, 'amap-basemap.png'), shotBuffer);
   console.log('\n已保存: data/screenshots/amap-basemap.png');
+
+  /**
+   * 从截图中统计"彩色像素"比例。
+   * 为什么不用 canvas.getImageData：高德用 WebGL 渲染，未开启 preserveDrawingBuffer 时
+   * 读出来是空白，因此改为对 CDP 截图做像素分析（与渲染方式无关，最可靠）。
+   */
+  function analyzeScreenshot(buffer, region) {
+    const zlib = require('zlib');
+    let pos = 8; // 跳过 PNG 签名
+    let width = 0, height = 0, bitDepth = 0, colorType = 0;
+    const idat = [];
+    while (pos + 8 <= buffer.length) {
+      const len = buffer.readUInt32BE(pos);
+      const type = buffer.toString('ascii', pos + 4, pos + 8);
+      const data = buffer.subarray(pos + 8, pos + 8 + len);
+      if (type === 'IHDR') {
+        width = data.readUInt32BE(0);
+        height = data.readUInt32BE(4);
+        bitDepth = data[8];
+        colorType = data[9];
+      } else if (type === 'IDAT') {
+        idat.push(data);
+      } else if (type === 'IEND') {
+        break;
+      }
+      pos += 12 + len;
+    }
+    if (!width || bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) {
+      return { ok: false, reason: `不支持的 PNG 格式（色深 ${bitDepth}，颜色类型 ${colorType}）` };
+    }
+    const raw = zlib.inflateSync(Buffer.concat(idat));
+    const channels = colorType === 6 ? 4 : 3;
+    const stride = width * channels;
+    const prev = Buffer.alloc(stride);
+    const current = Buffer.alloc(stride);
+    const x0 = Math.max(0, region ? region.x : 0);
+    const y0 = Math.max(0, region ? region.y : 0);
+    const x1 = Math.min(width, region ? region.x + region.width : width);
+    const y1 = Math.min(height, region ? region.y + region.height : height);
+
+    let offset = 0;
+    let sampled = 0;
+    let colored = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = raw[offset];
+      offset += 1;
+      raw.copy(current, 0, offset, offset + stride);
+      offset += stride;
+      // PNG 反滤波
+      for (let i = 0; i < stride; i += 1) {
+        const a = i >= channels ? current[i - channels] : 0;
+        const b = prev[i];
+        const c = i >= channels ? prev[i - channels] : 0;
+        let value = current[i];
+        if (filter === 1) value = (value + a) & 0xff;
+        else if (filter === 2) value = (value + b) & 0xff;
+        else if (filter === 3) value = (value + ((a + b) >> 1)) & 0xff;
+        else if (filter === 4) {
+          const p = a + b - c;
+          const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          const pr = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+          value = (value + pr) & 0xff;
+        }
+        current[i] = value;
+      }
+      if (y >= y0 && y < y1) {
+        for (let x = x0; x < x1; x += 3) {
+          const i = x * channels;
+          const r = current[i], g = current[i + 1], b = current[i + 2];
+          sampled += 1;
+          // 高德底图存在明显彩色（水体蓝、道路黄绿、绿地），纯黑/灰界面不会
+          if (Math.abs(r - g) > 14 || Math.abs(g - b) > 14 || Math.abs(r - b) > 14) colored += 1;
+        }
+      }
+      current.copy(prev);
+    }
+    return { ok: true, width, height, sampled, colored, ratio: sampled ? colored / sampled : 0 };
+  }
+
+  // 只分析地图区域（画布区），排除左右面板
+  const mapRect = JSON.parse(await evaluate(`JSON.stringify((function () {
+    const el = document.getElementById('canvas-wrap');
+    const r = el.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    return { x: Math.round(r.left * dpr), y: Math.round(r.top * dpr), width: Math.round(r.width * dpr), height: Math.round(r.height * dpr) };
+  })())`));
+  const shotAnalysis = analyzeScreenshot(shotBuffer, mapRect);
+  if (shotAnalysis.ok) {
+    console.log(`截图像素分析（地图区域 ${mapRect.width}x${mapRect.height}）：彩色像素 ${shotAnalysis.colored}/${shotAnalysis.sampled} = ${(shotAnalysis.ratio * 100).toFixed(1)}%`);
+  } else {
+    console.log('截图像素分析不可用：' + shotAnalysis.reason);
+  }
 
   const tileRequests = amapResponses.filter((r) => r.includes('get_tile') && r.startsWith('200')).length;
   const checks = [
     ['高德脚本加载成功', a.hasAMapNs],
     ['已切换到高德底图', a.baseMap === 'amap'],
-    ['地图容器已创建', a.amapContainer],
+    ['地图容器已创建', a.amapHostHasClass === true && a.amapLayers > 0],
     ['瓦片接口请求成功', tileRequests > 0],
-    ['地图内容已渲染（像素抽样）', a.inkRatio > 0.05 && a.coloredPixels > 20],
+    ['地图内容已渲染（截图像素分析）', shotAnalysis.ok ? shotAnalysis.ratio > 0.02 : false],
     ['内置画布已让位', a.builtinCanvasHidden === true],
     ['无脚本错误', errors.length === 0],
   ];
