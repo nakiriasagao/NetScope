@@ -32,6 +32,8 @@
     busy: false,
     view: 'map',
     baseMap: 'builtin',
+    /** 因局域网扫描而临时切到内置地图时，记住用户原本选择的底图，下次探测时恢复 */
+    pendingBaseMap: null,
   };
 
   var renderer = null;
@@ -621,9 +623,11 @@
     state.lan = Object.assign({}, result, { topology: topology });
 
     // 高德底图无法表达"私有地址"的拓扑：先等它完整切回内置引擎，
-    // 再绘制星型拓扑，否则会画到已隐藏的叠加层上（表现为"看不到拓扑图"）
+    // 再绘制星型拓扑，否则会画到已隐藏的叠加层上（表现为"看不到拓扑图"）。
+    // 同时记住用户的底图选择，下次探测时自动恢复。
     if (amapView) {
-      toast('局域网设备使用私有地址、没有地理坐标，已切回内置引擎以星型拓扑展示', 'warn', 9000);
+      state.pendingBaseMap = 'amap';
+      toast('局域网设备使用私有地址、没有地理坐标，已切回内置引擎以星型拓扑展示（下次探测会自动恢复高德底图）', 'warn', 9000);
       await switchBaseMap('builtin');
     }
 
@@ -942,13 +946,22 @@
           other.classList.toggle('is-active', other === button);
         });
         state.view = view;
-        // 高德底图只提供地理视图；切到"逻辑拓扑"时临时切回内置引擎
+        // 高德底图只提供地理视图。切到「逻辑拓扑」时**临时挂起**高德、
+        // 改用内置引擎绘制，但保留用户选择的底图；切回世界地图时自动恢复高德。
         if (amapView) {
-          toast('逻辑拓扑视图由内置引擎绘制（高德底图仅提供地理视图），已自动切换', 'warn', 8000);
-          switchBaseMap('builtin').then(function () {
-            renderer.setMode(view);
-            if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
-          });
+          if (view === 'graph') {
+            amapView.suspend();
+            renderer.setMode('graph');
+            if (state.lan && state.lan.topology) renderer.setLanTopology(state.lan.topology);
+            else if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+            if (state.hops.length) renderer.layoutLogical();
+            renderer.draw();
+          } else {
+            // 先让内置引擎把模式切回地图（清掉逻辑布局），再交还给高德
+            renderer.setMode('map');
+            amapView.resume();
+            amapView.setTrace(state.hops, { local: state.local, target: state.target });
+          }
           return;
         }
         if (state.lan && renderer.lanMode && state.lan.topology) {
@@ -1144,6 +1157,21 @@
     if (amapView) amapView.setTrace([], {});
     else renderer.setTrace([], {});
     renderer.setSelected(null);
+    // 若上次因局域网扫描临时切回了内置地图，这里恢复用户原本选择的底图
+    if (state.pendingBaseMap === 'amap' && state.baseMap === 'builtin') {
+      var restore = state.pendingBaseMap;
+      state.pendingBaseMap = null;
+      var savedHops = state.hops.slice();
+      var savedLocal = state.local;
+      var savedTarget = state.target;
+      setTimeout(function () {
+        switchBaseMap(restore).then(function () {
+          if (amapView && savedHops.length) {
+            amapView.setTrace(savedHops, { local: savedLocal, target: savedTarget });
+          }
+        });
+      }, 0);
+    }
     el.nodeCard.hidden = true;
     el.mapHint.hidden = true;
     el.mapStats.hidden = false;
