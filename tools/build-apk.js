@@ -31,7 +31,8 @@ const SDK_DIR = path.join(ROOT, 'build', 'android-sdk');
 const BUILD_DIR = path.join(ROOT, 'build', 'android');
 const OUT_DIR = path.join(ROOT, 'dist', 'android');
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
+const VERSION_CODE = '2';
 const MIN_SDK = '21';
 const TARGET_SDK = '34';
 const KEYSTORE_PASS = 'android';
@@ -148,16 +149,30 @@ function ensureKeystore(target) {
   }
   log('→ 工具链就绪（' + path.relative(ROOT, path.dirname(aapt2)) + '）');
 
-  // ---------- 1) 清理 ----------
+  // ---------- 1) 清理 + 准备 assets ----------
   fs.rmSync(BUILD_DIR, { recursive: true, force: true });
   fs.mkdirSync(path.join(BUILD_DIR, 'res-compiled'), { recursive: true });
   fs.mkdirSync(path.join(BUILD_DIR, 'classes'), { recursive: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
+  // 把 public/ 完整复制到 assets/web/：手机端 WebView 加载的就是这套资源，
+  // 因此界面与桌面版完全一致（含地图数据、前端脚本、高德接入层）。
+  const resDir = path.join(ANDROID_DIR, 'res');
+  const assetsWeb = path.join(ANDROID_DIR, 'assets', 'web');
+  const publicDir = path.join(ROOT, 'public');
+  fs.rmSync(path.join(ANDROID_DIR, 'assets'), { recursive: true, force: true });
+  fs.mkdirSync(assetsWeb, { recursive: true });
+  fs.cpSync(publicDir, assetsWeb, { recursive: true });
+  // runtime-config.js 由服务端按需生成，打包时不需要
+  const staleRuntime = path.join(assetsWeb, 'js', 'runtime-config.js');
+  if (fs.existsSync(staleRuntime)) fs.rmSync(staleRuntime, { force: true });
+  const assetCount = walk(assetsWeb, []).length;
+  const assetBytes = walk(assetsWeb, []).reduce((sum, f) => sum + fs.statSync(f).size, 0);
+  log(`→ 前端资源已放入 assets/web/（${assetCount} 个文件，${(assetBytes / 1024).toFixed(0)} KB）`);
+
   // ---------- 2) 编译资源 ----------
   // 用 --dir 让 aapt2 自己扫描整个 res/ 目录：它会按资源类型生成正确的
   // .flat 文件（手动逐个 compile 容易漏掉类型信息，产出 ZIP 而非 .flat）。
-  const resDir = path.join(ANDROID_DIR, 'res');
   const flatDir = path.join(BUILD_DIR, 'res-compiled');
   const compileRes = run(aapt2, ['compile', '--dir', resDir, '-o', flatDir], { timeout: 180000 });
   if (!compileRes.ok) {
@@ -178,11 +193,13 @@ function ensureKeystore(target) {
     'link',
     '-o', baseApk,
     '-I', androidJar,
+    // 把 assets/ 一并打进 APK（前端资源就在 assets/web/ 下）
+    '-A', path.join(ANDROID_DIR, 'assets'),
     '--manifest', path.join(ANDROID_DIR, 'AndroidManifest.xml'),
     '--java', path.join(BUILD_DIR, 'gen'),
     '--min-sdk-version', MIN_SDK,
     '--target-sdk-version', TARGET_SDK,
-    '--version-code', '1',
+    '--version-code', VERSION_CODE,
     '--version-name', APP_VERSION,
     '--no-version-vectors',
     ...flatFiles,
@@ -265,6 +282,20 @@ function ensureKeystore(target) {
   }
   log('→ classes.dex 已写入 APK');
 
+  // 校验前端资源确实在 APK 内（assets/web/index.html）
+  // 注意：aapt2 在 Windows 上写出的 ZIP 条目可能用反斜杠（assets\web\...），因此两种都要认
+  const assetCheck = verify.stdout.split('\n').filter((l) => /assets[\\/]web[\\/]/.test(l)).length;
+  if (assetCheck === 0) {
+    console.error('[错误] APK 内没有 assets/web/ 前端资源，手机端将无法加载界面');
+    process.exit(1);
+  }
+  const hasIndex = verify.stdout.split('\n').some((l) => /assets[\\/]web[\\/]index\.html/.test(l));
+  if (!hasIndex) {
+    console.error('[错误] APK 内缺少 assets/web/index.html');
+    process.exit(1);
+  }
+  log(`→ 已确认 APK 内含前端资源（${assetCheck} 项，含 index.html）`);
+
   // ---------- 7) 对齐 ----------
   const alignedApk = path.join(BUILD_DIR, 'aligned.apk');
   const zipRes = run(zipalign, ['-f', '-p', '4', unsignedApk, alignedApk], { timeout: 120000 });
@@ -315,7 +346,9 @@ function ensureKeystore(target) {
   log(`包名：com.netscope.app    版本：${APP_VERSION}    最低系统：Android 5.0（API ${MIN_SDK}）`);
   log('');
   log('安装方式：把 APK 传到手机点击安装，或用 adb install -r "' + path.basename(finalApk) + '"');
-  log('首次打开请在 菜单 → 设置 里填写电脑上 NetScope 的地址（如 http://192.168.1.5:8787）。');
+  log('');
+  log('这是**独立运行版**：后端服务与前端资源都已打进 APK，');
+  log('打开即用，不需要电脑、也不需要联网到任何 NetScope 服务器。');
 
   if (!verifySign.ok) process.exitCode = 1;
 })().catch((error) => {
