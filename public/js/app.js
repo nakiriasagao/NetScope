@@ -368,9 +368,18 @@
       // 画布此前被隐藏过，重新显示后必须按当前布局重新量尺寸，
       // 否则渲染尺寸仍是旧值（或在极端情况下取不到父元素）
       renderer.resize();
-      if (state.lan && renderer.lanMode && state.lan.topology) renderer.setLanTopology(state.lan.topology);
-      else if (state.hops.length) drawCurrentTrace();
-      else renderer.fitToContainer();
+      if (state.lan && renderer.lanMode && state.lan.topology) {
+        renderer.setLanTopology(state.lan.topology);
+      } else if (state.hops.length) {
+        // 尊重当前视图：逻辑拓扑视图下切换底图仍应保持逻辑拓扑，
+        // 否则会出现"画面变成世界地图、但按钮还显示逻辑拓扑"的不一致
+        if (state.view === 'graph') renderer.setMode('graph');
+        drawCurrentTrace();
+        if (renderer.options.animate) renderer.startAnimation();
+      } else {
+        renderer.setMode(state.view === 'graph' ? 'graph' : 'map');
+        renderer.fitToContainer();
+      }
       updateBaseMapStatus();
       return Promise.resolve();
     }
@@ -428,9 +437,19 @@
             /* ignore */
           }
           updateBaseMapStatus('高德已启用');
-          // 把当前数据重绘到高德底图上
-          if (state.lan && state.lan.topology) view.setLanTopology(state.lan.topology);
-          else if (state.hops.length) view.setTrace(state.hops, { local: state.local, target: state.target });
+          // 把当前数据重绘到高德底图上。
+          // 注意：若当前是「逻辑拓扑」视图，必须立刻挂起高德——
+          // 否则画面会变成世界地图，而上方按钮仍显示逻辑拓扑（状态不一致）。
+          if (state.view === 'graph' && !renderer.lanMode) {
+            view.suspend();
+            renderer.setMode('graph');
+            drawCurrentTrace();
+            if (renderer.options.animate) renderer.startAnimation();
+          } else if (state.lan && state.lan.topology) {
+            view.setLanTopology(state.lan.topology);
+          } else if (state.hops.length) {
+            view.setTrace(state.hops, { local: state.local, target: state.target });
+          }
           if (!opts.silent) toast('已切换到高德地图底图', 'ok');
           return view;
         });
@@ -451,7 +470,10 @@
           /* ignore */
         }
         renderer.resize();
+        // 回退时同样尊重当前视图（逻辑拓扑视图下不要切成世界地图）
+        if (state.view === 'graph' && !renderer.lanMode) renderer.setMode('graph');
         if (state.hops.length) drawCurrentTrace();
+        if (renderer.options.animate) renderer.startAnimation();
         updateBaseMapStatus('加载失败，已回退');
         if (!opts.silent) {
           toast('高德地图加载失败：' + escapeHtml(error.message) + '<br/>已回退到内置世界地图', 'error', 12000);
