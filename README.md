@@ -173,6 +173,10 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 | 底图选择器 | 内置世界地图 / 高德地图（配置 Key 后可用，二者拓扑样式完全一致） |
 | 右侧面板 | 路由跳点表、连通性、端口、本机网络、DNS、安全证书六个标签页 |
 
+> **关于逻辑拓扑与高德底图**：高德是*地理*底图，而逻辑拓扑表达的是*链路关系*（与地理位置无关），
+> 两者语义不兼容。因此切到逻辑拓扑时会**临时挂起**高德、改用内置引擎绘制，
+> 但**你的底图选择会被完整保留**——切回世界地图会自动恢复高德底图。
+
 ### 地图交互
 
 | 操作 | 效果 |
@@ -398,6 +402,7 @@ node test/node-color-check.js     # 节点着色规则断言（13 种角色组�
 node test/map-switch-e2e.js       # 底图切换与跳数标签验收
 node test/style-consistency-e2e.js # 图例完整性 + 两套底图样式一致性
 node test/lan-then-trace-e2e.js    # 扫描局域网后再探测的全流程回归
+node test/view-switch-basemap-e2e.js # 视图切换保持底图选择 + 绘制性能
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
