@@ -67,6 +67,11 @@
     // 防御：容器或画布可能已被移除/隐藏（例如切换底图过程中），此时直接跳过而不是抛错
     var parent = this.canvas && this.canvas.parentElement;
     if (!this.canvas || !parent || typeof parent.getBoundingClientRect !== 'function') return;
+    // 关键：画布元素可能被替换过（例如切到高德底图时改为绘制到叠加层），
+    // 此时必须重新获取 2D 上下文，否则绘制内容仍然落在旧画布上
+    if (!this.ctx || this.ctx.canvas !== this.canvas) {
+      this.ctx = this.canvas.getContext('2d');
+    }
     var rect = parent.getBoundingClientRect();
     var w = Math.max(320, Math.floor(rect.width));
     var h = Math.max(240, Math.floor(rect.height));
@@ -213,9 +218,15 @@
     return { x: (screenX - this.view.offsetX) / this.view.scale, y: (screenY - this.view.offsetY) / this.view.scale };
   };
 
-  /** 节点在屏幕上的位置（世界地图用投影坐标，逻辑拓扑用布局坐标） */
+  /**
+   * 节点在屏幕上的位置
+   *   - 逻辑拓扑：使用布局坐标
+   *   - 叠加模式（plain，高德底图）：使用由外部投影钩子写入的 sx/sy
+   *   - 世界地图：世界坐标经视图变换
+   */
   Renderer.prototype.nodeScreen = function (node) {
     if (this.mode === 'graph') return { x: node.lx, y: node.ly };
+    if (this.plain) return { x: node.sx, y: node.sy };
     return this.toScreen(node.x, node.y);
   };
 
@@ -675,6 +686,18 @@
   Renderer.prototype.draw = function (now) {
     var ctx = this.ctx;
     var time = typeof now === 'number' ? now : performance.now();
+
+    // 叠加模式（高德底图）：底图由高德绘制，这里只画拓扑。
+    // 每次绘制前先按当前地图视图重算节点屏幕坐标，保证平移缩放时拓扑跟随。
+    if (this.plain) {
+      if (typeof this.reproject === 'function') this.reproject(this);
+      ctx.clearRect(0, 0, this.width, this.height);
+      if (this.options.showLinks) this.drawArcs(ctx, time);
+      this.drawNodes(ctx, time);
+      if (this.overlay) this.drawOverlay();
+      return;
+    }
+
     ctx.clearRect(0, 0, this.width, this.height);
 
     if (this.mode === 'map') {
@@ -1064,6 +1087,30 @@
     return COLORS.route;
   };
 
+  /**
+   * 节点标签里的附加信息：第 N 跳 · 时延
+   * 起点（本机）显示"起点"，其它节点显示它在本条路径中的跳序号。
+   */
+  Renderer.prototype.nodeHopInfo = function (node) {
+    if (this.lanMode) return null;
+    var parts = [];
+    if (node.isStart) {
+      parts.push('起点');
+    } else {
+      var ttls = (node.hops || [])
+        .map(function (h) { return h.ttl; })
+        .filter(function (v) { return typeof v === 'number'; });
+      if (ttls.length) {
+        var first = Math.min.apply(null, ttls);
+        var last = Math.max.apply(null, ttls);
+        parts.push(first === last ? '第 ' + first + ' 跳' : '第 ' + first + '-' + last + ' 跳');
+      }
+    }
+    if (typeof node.latency === 'number') parts.push(node.latency + ' ms');
+    else if (node.isTimeout) parts.push('超时');
+    return parts.length ? parts.join(' · ') : null;
+  };
+
   Renderer.prototype.drawNodes = function (ctx, time) {
     var self = this;
     ctx.save();
@@ -1144,8 +1191,11 @@
       if (!showAll && !isHover && !isSelected) return;
 
       var text = node.label || '';
-      if (typeof node.latency === 'number' && node.latency > 0) text += '  ' + node.latency + ' ms';
-      else if (node.isStart && !self.lanMode) text += '  0 ms';
+      // 节点标签：带上"第 N 跳"和时延，方便一眼看出每个点在第几跳、延迟多少
+      if (!self.lanMode) {
+        var hopInfo = self.nodeHopInfo(node);
+        if (hopInfo) text += '  ' + hopInfo;
+      }
 
       var w = Math.min(260, text.length * 7 + 18);
       var h = 20;
