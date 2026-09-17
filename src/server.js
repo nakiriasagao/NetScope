@@ -83,6 +83,9 @@ function safeJoin(root, urlPath) {
   return full;
 }
 
+/** 是否已经向浏览器发送过"清理缓存"指令（服务进程内只发一次） */
+let cachePurgeSent = false;
+
 function serveStatic(req, res) {
   const urlPath = pathOnly(req.url);
   const filePath = safeJoin(config.publicDir, urlPath === '/' ? '/index.html' : urlPath);
@@ -113,13 +116,48 @@ function serveFile(req, res, filePath, stat) {
   const mime = MIME_TYPES[ext] || 'application/octet-stream';
   // 数据文件会随构建脚本更新，禁止强缓存，避免用户看到旧地图（横条纹等已修复的问题）
   const isData = filePath.includes(`${path.sep}data${path.sep}`);
+  // HTML 与 data/ 下的数据文件用 no-cache：每次都要向服务端确认，
+  // 配合下面的 ETag / Last-Modified 走 304 条件请求，既不会拿到旧内容，也不浪费带宽。
   const cacheControl = ext === '.html' || isData ? 'no-cache' : `public, max-age=${config.http.staticMaxAge}`;
+  const etag = stat ? `"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"` : null;
+  const lastModified = stat ? new Date(stat.mtimeMs).toUTCString() : null;
+
+  // 条件请求：内容没变就回 304，避免重新下载世界地图这种较大的数据文件
+  if (stat && etag) {
+    const ifNoneMatch = req.headers['if-none-match'];
+    const ifModifiedSince = req.headers['if-modified-since'];
+    const etagHit = ifNoneMatch && ifNoneMatch.split(',').map((s) => s.trim()).includes(etag);
+    const timeHit = ifModifiedSince && new Date(ifModifiedSince).getTime() >= Math.floor(stat.mtimeMs / 1000) * 1000;
+    if (etagHit || timeHit) {
+      res.writeHead(304, {
+        ETag: etag,
+        'Last-Modified': lastModified,
+        'Cache-Control': cacheControl,
+        ...corsHeaders(),
+      });
+      res.end();
+      return;
+    }
+  }
+
   const headers = {
     'Content-Type': mime,
     'Content-Length': stat ? stat.size : 0,
     'Cache-Control': cacheControl,
     ...corsHeaders(),
   };
+  if (etag) headers.ETag = etag;
+  if (lastModified) headers['Last-Modified'] = lastModified;
+
+  // 首次返回页面时，主动清理浏览器侧缓存：
+  // 早期版本把 data/ 当成普通静态资源做过强缓存，旧的世界地图数据可能还留在
+  // 浏览器缓存里（表现为地图样式没有更新）。这里发一次 Clear-Site-Data，
+  // 清掉本源的 HTTP 缓存；之后靠 ETag 条件请求保持最新，不再重复发送。
+  if (!cachePurgeSent && ext === '.html') {
+    cachePurgeSent = true;
+    headers['Clear-Site-Data'] = '"cache"';
+  }
+
   res.writeHead(200, headers);
   if (req.method === 'HEAD') {
     res.end();
