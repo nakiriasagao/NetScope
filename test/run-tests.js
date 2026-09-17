@@ -56,6 +56,7 @@ const MAP_STYLE_FILE = path.join(__dirname, 'map-style-e2e.js');
 const AMAP_TO_BUILTIN_FILE = path.join(__dirname, 'amap-graph-to-builtin-e2e.js');
 const MATRIX_FILE = path.join(__dirname, 'basemap-matrix-e2e.js');
 const PACKAGE_FILE = path.join(__dirname, 'package-e2e.js');
+const ANDROID_BACKEND_FILE = path.join(__dirname, 'android-backend-verify.js');
 
 /**
  * 测试注册表：name → { file, title, kind, group }
@@ -81,13 +82,14 @@ const REGISTRY = {
   matrix: { file: MATRIX_FILE, title: '视图×底图全组合', kind: 'script', group: 'map', browser: true, amap: true },
   cache: { file: CACHE_FILE, title: '地图数据缓存行为', kind: 'script', group: 'core' },
   bundle: { file: PACKAGE_FILE, title: '打包产物验收（exe + APK）', kind: 'script', group: 'pack' },
+  android: { file: ANDROID_BACKEND_FILE, title: '手机端后端（纯 Java 桌面验证）', kind: 'script', group: 'pack' },
 };
 
 const GROUPS = {
   core: ['unit', 'smoke', 'cache'],
-  pack: ['bundle'],
+  pack: ['bundle', 'android'],
   map: ['lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
-  all: ['unit', 'smoke', 'cache', 'bundle', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
+  all: ['unit', 'smoke', 'cache', 'bundle', 'android', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
 };
 
 /** 解析 --only= / --list / --all */
