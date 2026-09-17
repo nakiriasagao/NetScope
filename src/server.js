@@ -36,12 +36,62 @@ const MIME_TYPES = {
 };
 
 /**
+ * 内嵌资源访问器（打包为单文件 exe 时使用）
+ *
+ * SEA 构建会把 public/ 下的所有前端资源注入可执行文件，
+ * 这里通过 node:sea 读出并直接返回，无需磁盘上的 public/ 目录。
+ * 非 SEA 环境下 require('node:sea') 不可用，因此用 try 包裹。
+ */
+let seaApi = null;
+try {
+  // eslint-disable-next-line global-require
+  seaApi = require('node:sea');
+  if (!seaApi || typeof seaApi.isSea !== 'function' || !seaApi.isSea()) seaApi = null;
+} catch (_) {
+  seaApi = null;
+}
+
+/** 是否运行在单文件可执行程序内 */
+function isSeaRuntime() {
+  return Boolean(seaApi);
+}
+
+/**
+ * 读取内嵌资源
+ * @param {string} assetKey 形如 'index.html'、'js/app.js'（相对 public/，使用正斜杠）
+ * @returns {Buffer|null}
+ */
+function readAsset(assetKey) {
+  if (!seaApi) return null;
+  try {
+    return Buffer.from(seaApi.getAsset(assetKey));
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
  * 启动时把实际监听地址写入 public/js/runtime-config.js，
  * 这样即使前端页面是从 file:// 或其它端口打开的，也能自动找到 API。
+ *
+ * 单文件模式下 public/ 可能是只读或不存在的，此时跳过写盘，
+ * 改由内嵌资源里的 runtime-config.js 兜底（见 readAsset 调用处）。
  */
 function writeRuntimeConfig(address) {
   const target = path.join(config.publicDir, 'js', 'runtime-config.js');
-  const content = `/* 由 NetScope 服务端自动生成，勿手工修改 */\nwindow.NETSCOPE_RUNTIME = ${JSON.stringify(
+  const content = runtimeConfigContent(address);
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf8');
+  } catch (error) {
+    if (!isSeaRuntime()) console.warn(`[warn] 无法写入 runtime-config.js: ${error.message}`);
+  }
+  return target;
+}
+
+/** runtime-config.js 的内容 */
+function runtimeConfigContent(address) {
+  return `/* 由 NetScope 服务端自动生成，勿手工修改 */\nwindow.NETSCOPE_RUNTIME = ${JSON.stringify(
     {
       apiBase: address,
       version: require('../package.json').version,
@@ -50,13 +100,6 @@ function writeRuntimeConfig(address) {
     null,
     2,
   )};\n`;
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, 'utf8');
-  } catch (error) {
-    console.warn(`[warn] 无法写入 runtime-config.js: ${error.message}`);
-  }
-  return target;
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,6 +139,8 @@ function serveStatic(req, res) {
 
   fs.stat(filePath, (err, stat) => {
     if (err || !stat.isFile()) {
+      // 磁盘上找不到时，尝试从内嵌资源读取（单文件 exe 模式）
+      if (serveAsset(req, res, urlPath)) return;
       // 单页应用：未知路径回退到 index.html（仅限非资源类请求）
       if (!path.extname(urlPath)) {
         const fallback = path.join(config.publicDir, 'index.html');
@@ -103,12 +148,63 @@ function serveStatic(req, res) {
           serveFile(req, res, fallback, stat);
           return;
         }
+        if (serveAsset(req, res, '/index.html')) return;
       }
       sendError(res, 404, `资源不存在：${urlPath}`);
       return;
     }
     serveFile(req, res, filePath, stat);
   });
+}
+
+/**
+ * 从内嵌资源返回响应（单文件 exe 模式）
+ *
+ * 内嵌资源的"修改时间"就是可执行文件的构建时间，因此用进程启动时间做 ETag 依据，
+ * 保证同一份 exe 内资源稳定、重新打包后自动失效。
+ * @returns {boolean} 是否已处理该请求
+ */
+function serveAsset(req, res, urlPath) {
+  if (!seaApi) return false;
+
+  let key = pathOnly(urlPath).replace(/^\/+/, '');
+  if (!key) key = 'index.html';
+  if (key === 'js/runtime-config.js') {
+    // 内嵌模式下 public/ 只读：这个文件按当前监听地址即时生成
+    const body = Buffer.from(runtimeConfigContent(`http://${req.headers.host || '127.0.0.1'}`), 'utf8');
+    res.writeHead(200, {
+      'Content-Type': MIME_TYPES['.js'],
+      'Content-Length': body.length,
+      'Cache-Control': 'no-cache',
+      ...corsHeaders(),
+    });
+    res.end(req.method === 'HEAD' ? undefined : body);
+    return true;
+  }
+
+  const body = readAsset(key);
+  if (!body) return false;
+
+  const ext = path.extname(key).toLowerCase();
+  const mime = MIME_TYPES[ext] || 'application/octet-stream';
+  const isData = key.startsWith('data/');
+  const cacheControl = ext === '.html' || isData ? 'no-cache' : `public, max-age=${config.http.staticMaxAge}`;
+  const etag = `"sea-${body.length.toString(16)}-${Math.floor(process.uptime()).toString(16)}"`;
+
+  if (req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { ETag: etag, 'Cache-Control': cacheControl, ...corsHeaders() });
+    res.end();
+    return true;
+  }
+  res.writeHead(200, {
+    'Content-Type': mime,
+    'Content-Length': body.length,
+    'Cache-Control': cacheControl,
+    ETag: etag,
+    ...corsHeaders(),
+  });
+  res.end(req.method === 'HEAD' ? undefined : body);
+  return true;
 }
 
 function serveFile(req, res, filePath, stat) {
