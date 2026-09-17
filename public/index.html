@@ -188,10 +188,14 @@
             <span class="legend-item"><i class="dot dot-hop"></i>中间节点</span>
             <span class="legend-item"><i class="dot dot-target"></i>目标</span>
             <span class="legend-item"><i class="dot dot-timeout"></i>无响应</span>
+            <span class="legend-item legend-note" title="中间节点默认显示为本色蓝；只有时延或丢包明显异常时才变为黄色（丢包≥20%）或红色（丢包≥50%、时延>180ms）">异常跳转黄/红</span>
           </div>
         </div>
 
         <div class="canvas-wrap" id="canvas-wrap">
+          <!-- 高德地图专用容器：高德的 destroy() 会清空容器内容，
+               因此必须与内置画布/标签层/统计栏分开，避免切回内置地图时被一起删掉 -->
+          <div class="amap-host" id="amap-host" hidden></div>
           <canvas id="map-canvas"></canvas>
           <svg id="node-overlay" class="node-overlay"></svg>
           <!-- 统计栏：左右两端对齐，中间自适应；地址再长也不会挤压右侧 KPI -->
