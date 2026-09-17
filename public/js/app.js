@@ -159,7 +159,11 @@
       canvas: $('map-canvas'),
       canvasWrap: $('canvas-wrap'),
       amapHost: $('amap-host'),
+      overlayCanvas: $('overlay-canvas'),
       overlay: $('node-overlay'),
+      legendPanel: $('legend-panel'),
+      btnLegend: $('btn-legend'),
+      legendClose: $('legend-close'),
       mapHint: $('map-hint'),
       mapStats: $('map-stats'),
       statTarget: $('stat-target'),
@@ -392,9 +396,17 @@
         // 注意：必须用独立的高德容器。高德的 destroy() 会清空容器内容，
         // 若直接挂在 canvas-wrap 上，切回内置地图时会把画布/标签层/统计栏一起删掉。
         var host = el.amapHost || el.canvasWrap;
-        var view = Amap.createAmapView(host, el.overlay, {
-          onReady: function () {
-            updateBaseMapStatus('高德已启用');
+        // 高德只负责底图；节点、连线、标签、动画全部交给内置引擎绘制到叠加层，
+        // 这样两套底图的拓扑样式完全一致（共用同一份绘制代码）。
+        var view = Amap.createOverlayView({
+          host: host,
+          overlayCanvas: el.overlayCanvas,
+          labelLayer: el.overlay,
+          renderer: renderer,
+          callbacks: {
+            onReady: function () {
+              updateBaseMapStatus('高德已启用');
+            },
           },
         });
         return view.init({ zoom: 3, center: [110, 32], mapStyle: 'amap://styles/darkblue' }).then(function () {
@@ -824,6 +836,18 @@
 
     el.btnLocal.addEventListener('click', runLocalDiscoveryOnly);
     if (el.btnLanScan) el.btnLanScan.addEventListener('click', runLanScan);
+
+    // 图例面板：默认展开（用户反馈看不懂颜色含义），可收起
+    if (el.btnLegend) {
+      el.btnLegend.addEventListener('click', function () {
+        if (el.legendPanel) el.legendPanel.hidden = !el.legendPanel.hidden;
+      });
+    }
+    if (el.legendClose) {
+      el.legendClose.addEventListener('click', function () {
+        if (el.legendPanel) el.legendPanel.hidden = true;
+      });
+    }
 
     // 底图切换
     if (el.optBaseMap) {
