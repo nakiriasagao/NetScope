@@ -733,6 +733,8 @@
       if (this.options.showGrid) this.drawGraticule(ctx);
       if (this.options.night) this.drawNight(ctx);
       this.drawCountries(ctx);
+      // 国界之内再画一级行政区（省/州/地区）边界，让地图有内部结构
+      if (this.options.showAdmin1 !== false) this.drawAdmin1(ctx);
     } else {
       this.drawGraphBackground(ctx);
     }
@@ -902,6 +904,63 @@
       ctx.fill();
       if (scale > 0.35) ctx.stroke();
     }
+    ctx.restore();
+  };
+
+  /**
+   * 一级行政区（省 / 州 / 地区）边界线
+   *
+   * 在国界之内再画出地区划分，让地图有"内部结构"而不是纯色块。
+   *
+   * 两个要点：
+   *   1. 按缩放层级淡入 —— 全球视图下只显示国界（否则线条糊成一片、
+   *      反而分不清国家），放大到一定倍数后再渐显地区划分；
+   *   2. 每条线在构建期就带上了包围盒，这里做视口裁剪，
+   *      避免每次平移缩放都遍历上万个顶点。
+   */
+  Renderer.prototype.drawAdmin1 = function (ctx) {
+    if (!this.world) return;
+    var provinces = this.world.provinces;
+    if (!provinces || !provinces.length) return;
+
+    var scale = this.view.scale;
+    // 缩放淡入：<1.4 完全不显示，1.4→2.4 之间线性过渡
+    var fade = (scale - 1.4) / 1.0;
+    if (fade <= 0) return;
+    if (fade > 1) fade = 1;
+
+    var viewBox = {
+      x0: -this.view.offsetX / scale,
+      y0: -this.view.offsetY / scale,
+      x1: (this.width - this.view.offsetX) / scale,
+      y1: (this.height - this.view.offsetY) / scale,
+    };
+
+    ctx.save();
+    ctx.translate(this.view.offsetX, this.view.offsetY);
+    ctx.scale(scale, scale);
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = fade;
+    ctx.strokeStyle = COLORS.admin1;
+    // 缩放越大线条越细（按屏幕像素恒定），避免放大后变成粗色带
+    ctx.lineWidth = Math.max(0.25, 0.45 / scale);
+    ctx.beginPath();
+
+    for (var i = 0; i < provinces.length; i += 1) {
+      var item = provinces[i];
+      // 兼容两种数据结构：{p,b}（新）与纯数组（旧）
+      var line = Array.isArray(item) ? item : item.p;
+      if (!line || line.length < 4) continue;
+      if (!Array.isArray(item)) {
+        var b = item.b;
+        if (b[2] < viewBox.x0 || b[0] > viewBox.x1 || b[3] < viewBox.y0 || b[1] > viewBox.y1) continue;
+      }
+      ctx.moveTo(line[0], line[1]);
+      for (var p = 2; p < line.length; p += 2) {
+        ctx.lineTo(line[p], line[p + 1]);
+      }
+    }
+    ctx.stroke();
     ctx.restore();
   };
 
