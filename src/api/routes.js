@@ -202,9 +202,15 @@ function startTraceTask(target, options) {
       }
 
       // 逐跳推送地理信息，前端边收边画（分批推送，控制单条事件体积）
+      //
+      // 注意：**目标 IP 必须一起定位**。目标或运营商常常过滤探测报文，
+      // 此时目标不会出现在跳点列表里；若只定位跳点，前端就拿不到目标的
+      // 地理坐标，既画不出终点、也容易把最后一个中间节点误当成目的地
+      //（实际踩到的例子：江苏的 IP 被画成"广州"，因为末响应节点在广州）。
       const hopIPs = (result.hops || []).map((h) => h.ip).filter(Boolean);
+      const geoIPs = [...new Set([...hopIPs, targetIP].filter(Boolean))];
       const [geoMap, local] = await Promise.all([
-        orchestrator.geolocate([...new Set(hopIPs)], { signal: task.signal }),
+        orchestrator.geolocate(geoIPs, { signal: task.signal }),
         orchestrator.localAnchorInfo(),
       ]);
       // 私有地址（本机内网、网关）按公网出口位置落点，避免世界地图上出现跨洲假连线
@@ -218,12 +224,23 @@ function startTraceTask(target, options) {
       }
       emitHopsInBatches(emitter, slimHops);
 
+      // 目标标准化为对象（与 /api/diagnose 的结构保持一致）：
+      // 前端要读 target.primaryIP 才能把终点画在正确位置
+      const targetInfo = {
+        host: target,
+        primaryIP: targetIP || null,
+        kind: targetIP && targetIP.indexOf(':') >= 0 ? 'ipv6' : 'ipv4',
+        resolvedFrom: targetIP && targetIP !== target ? target : null,
+      };
+
       const payload = {
-        target,
+        input: target,
+        target: targetInfo,
         targetIP,
         trace: { ...result, hops: slimHops },
         geo: geoMap,
         local,
+        generatedAt: new Date().toISOString(),
       };
       task.result = payload;
       finishTask(task, { result: payload });
