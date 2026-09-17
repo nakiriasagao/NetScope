@@ -22,7 +22,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const OWNER = process.env.GH_OWNER || 'nakiriasagao';
-const REPO = process.env.GH_REPO || 'webtraceor';
+const REPO = process.env.GH_REPO || 'NetScope';
 const BRANCH = process.env.GH_BRANCH || 'main';
 const API = 'https://api.github.com';
 
