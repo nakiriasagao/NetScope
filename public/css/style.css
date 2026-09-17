@@ -479,11 +479,192 @@ select {
   background: var(--accent);
 }
 
-.map-legend {
+.map-toolbar-right {
   margin-left: auto;
+}
+
+/* ==================== 图例面板 ==================== */
+
+.legend-panel {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 330px;
+  max-height: calc(100% - 20px);
+  overflow-y: auto;
+  background: rgba(11, 18, 32, 0.95);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 12px 14px;
+  z-index: 22;
+  backdrop-filter: blur(8px);
+}
+
+.legend-panel[hidden] {
+  display: none !important;
+}
+
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.legend-head h4 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.5px;
+}
+
+.legend-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-mute);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.legend-close:hover {
+  color: var(--bad);
+}
+
+.legend-section {
+  padding: 8px 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.legend-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.legend-title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-mute);
+  margin-bottom: 7px;
+}
+
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.legend-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 7px;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-dim);
-  gap: 12px;
+}
+
+.legend-list b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.legend-sub {
+  display: block;
+  color: var(--text-mute);
+  font-size: 11px;
+  line-height: 1.45;
+  margin-top: 1px;
+}
+
+.legend-list .dot {
+  flex: 0 0 auto;
+  margin-top: 4px;
+}
+
+.legend-note {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+
+/* 连线样例 */
+.line-sample {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 14px;
+  margin-top: 2px;
+  display: inline-block;
+  position: relative;
+}
+
+.line-lat-good {
+  background: linear-gradient(90deg, #34d399 0 33%, #fbbf24 33% 66%, #f87171 66% 100%);
+  height: 3px;
+  border-radius: 2px;
+  margin-top: 7px;
+}
+
+.line-flow {
+  background: repeating-linear-gradient(90deg, #38bdf8 0 5px, transparent 5px 12px);
+  height: 3px;
+  border-radius: 2px;
+  margin-top: 7px;
+}
+
+.line-label {
+  width: auto;
+  height: auto;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: rgba(7, 12, 22, 0.8);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+
+.line-gap {
+  border-top: 2px dashed var(--text-mute);
+  height: 0;
+  margin-top: 8px;
+}
+
+/* 图例色点 */
+.dot-mid {
+  background: var(--warn);
+  box-shadow: 0 0 5px rgba(251, 191, 36, 0.55);
+}
+
+.dot-bad {
+  background: var(--bad);
+  box-shadow: 0 0 5px rgba(248, 113, 113, 0.55);
+}
+
+.dot-gateway {
+  background: #fbbf24;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
+}
+
+.dot-self {
+  background: #34d399;
+  box-shadow: 0 0 6px rgba(52, 211, 153, 0.6);
+}
+
+.dot-internet {
+  background: #f472b6;
+  box-shadow: 0 0 6px rgba(244, 114, 182, 0.6);
+}
+
+.dot-device {
+  background: #38bdf8;
 }
 
 /* ---------- 工具栏中的底图选择器 ---------- */
@@ -705,6 +886,20 @@ select {
 }
 
 .amap-host[hidden] {
+  display: none !important;
+}
+
+/* 高德模式下的拓扑绘制层：复用内置引擎的绘制代码，保证两套底图样式完全一致 */
+.overlay-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.overlay-canvas[hidden] {
   display: none !important;
 }
 
