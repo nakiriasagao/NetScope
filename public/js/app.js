@@ -469,26 +469,37 @@
     }
 
     // 切到高德
-    var credentials = Amap ? Amap.credentials() : { key: '' };
-    if (!credentials.key) {
-      updateBaseMapStatus('未配置 Key');
-      if (el.optBaseMap) el.optBaseMap.value = 'builtin';
-      if (!opts.silent) {
-        toast('尚未配置高德 Key：点击左侧「⚙ 地图设置」填写后即可启用高德底图', 'warn', 9000);
-        openSettings();
-      }
-      return Promise.resolve();
-    }
+    // 凭据要先异步解析：本地存储为空时（exe 每次新开应用窗口、或清了浏览器缓存）
+    // 需要回落到服务端保存的配置，否则会误报"未配置 Key"。
+    var credentialPromise = Amap && Amap.resolveCredentials
+      ? Amap.resolveCredentials(false)
+      : Promise.resolve(Amap ? Amap.credentials() : { key: '' });
 
-    return api
-      .amapConfig()
+    return credentialPromise
       .catch(function () {
-        return null;
+        return { key: '' };
       })
-      .then(function () {
-        return Amap.loadAmap({ plugins: [] });
+      .then(function (credentials) {
+        if (!credentials.key) {
+          updateBaseMapStatus('未配置 Key');
+          if (el.optBaseMap) el.optBaseMap.value = 'builtin';
+          if (!opts.silent) {
+            toast('尚未配置高德 Key：点击左侧「⚙ 地图设置」填写后即可启用高德底图', 'warn', 9000);
+            openSettings();
+          }
+          return null;
+        }
+        return api
+          .amapConfig()
+          .catch(function () {
+            return null;
+          })
+          .then(function () {
+            return Amap.loadAmap({ plugins: [] });
+          });
       })
-      .then(function () {
+      .then(function (loaded) {
+        if (loaded === null) return null;
         // 异步初始化期间用户又切换了底图（例如切回内置）→ 放弃本次高德初始化。
         // 否则会把用户刚选的内置底图覆盖掉，画面变成空白的高德视图。
         if (token !== baseMapToken) {
@@ -623,6 +634,19 @@
     if (el.amapEnabled) el.amapEnabled.checked = cred.enabled !== false;
     if (el.amapTestResult) el.amapTestResult.innerHTML = '';
     el.settingsModal.hidden = false;
+
+    // 本地存储为空（例如 exe 打开的新应用窗口）时，从服务端已保存的配置回填，
+    // 否则用户会以为"Key 没被缓存"，每次都要重新输入。
+    if (Amap && Amap.ensureCredentials && !cred.key) {
+      Amap.ensureCredentials().then(function (resolved) {
+        if (!resolved || !resolved.key) return;
+        if (el.amapKey && !el.amapKey.value) el.amapKey.value = resolved.key;
+        if (el.amapSecurity && !el.amapSecurity.value) el.amapSecurity.value = resolved.security || '';
+        if (el.amapEnabled) el.amapEnabled.checked = resolved.enabled !== false;
+      }).catch(function () {
+        /* 回填失败不影响手动填写 */
+      });
+    }
   }
 
   function closeSettings() {
