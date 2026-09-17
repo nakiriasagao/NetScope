@@ -13,10 +13,12 @@ node test/run-tests.js --list                    # 查看全部可用名称
 node test/run-tests.js --all                     # 全量（仅用户明确要求时）
 ```
 
-- 全量 17 项约 5 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
+- 全量 18 项约 5 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
   例如：改了 `draw.js` 的着色 → `color`；改了底图/视图逻辑 →
-  `viewswitch,keepview,lanlock,amaptobuiltin`；改了地图数据/渲染 → `mapstyle`；
+  `viewswitch,keepview,lanlock,amaptobuiltin,matrix`；改了地图数据/渲染 → `mapstyle`；
   改了地图数据加载/服务端静态资源 → `cache,smoke`。
+  **改动涉及"视图/底图/模式"状态机时，务必跑 `matrix`** —— 单一场景测试
+  容易漏掉状态残留类缺陷。
 - 单个测试文件也可以直接 `node test/xxx-e2e.js`。
 
 ### 测试清单（`--only=` 可用名）
@@ -40,6 +42,7 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 | `keepview` | 切底图保持视图 | 是 |
 | `lanlock` | 局域网锁定世界地图 | 是 |
 | `amaptobuiltin` | 高德逻辑拓扑切回内置地图（含底图初始化竞态） | 是 |
+| `matrix` | 视图×底图全组合矩阵（21 条路径，状态残留类缺陷的兜底） | 是 |
 
 分组：`core`（unit, smoke, cache）、`map`（全部地图/底图/拓扑类）。
 
@@ -70,8 +73,12 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 - 高德底图是**异步初始化**的，任何与底图切换相关的改动都必须考虑竞态：
   用 `baseMapToken` 校验异步结果是否已被新的切换取代，
   用 `pendingBaseMapInit` 取消待执行的启动恢复任务。
-- 涉及"视图 / 底图 / 拓扑"的改动，注意这四条不变量：
+- 涉及"视图 / 底图 / 拓扑"的改动，注意这五条不变量：
   1. 底图选择（`state.baseMap` + localStorage）只在用户切换底图时改变；
   2. 切换底图不改变当前视图（世界地图 / 逻辑拓扑）；
   3. 逻辑拓扑按"跳"展开（`merge: false`），世界地图按地理坐标合并；
-  4. 扫描局域网后锁定世界地图，下一次探测外网自动解锁。
+  4. 扫描局域网后锁定世界地图，下一次探测外网自动解锁；
+  5. **渲染器模式必须与 `state.view` 对齐**：`drawCurrentTrace()` 只按"当前模式"
+     绘制、不会改模式，所以任何切换路径都要显式把 `renderer.mode` 调到
+     视图对应的值（`map`/`graph`）—— 否则会"视图是地图、渲染器还在画逻辑拓扑"，
+     表现就是内置世界地图完全不显示。
