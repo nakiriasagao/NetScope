@@ -492,13 +492,15 @@ select {
   width: 330px;
   max-height: calc(100% - 20px);
   overflow-y: auto;
-  background: rgba(11, 18, 32, 0.95);
+  /* 这里刻意不使用 backdrop-filter：
+     面板浮在持续重绘的地图 canvas 之上，毛玻璃会让浏览器每帧重算背景模糊，
+     是"地图/拓扑动画卡顿"的常见原因。改用高不透明度实色背景，视觉几乎一致。 */
+  background: rgba(11, 18, 32, 0.97);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   padding: 12px 14px;
   z-index: 22;
-  backdrop-filter: blur(8px);
 }
 
 .legend-panel[hidden] {
