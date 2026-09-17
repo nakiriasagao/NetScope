@@ -320,13 +320,14 @@ async function main() {
     await new Promise((r) => setTimeout(r, 250));
     const layout = JSON.parse(await evaluate(`JSON.stringify((function () {
       const stats = document.getElementById('map-stats');
+      const canvasWrap = document.getElementById('canvas-wrap');
       const rects = {};
       stats.querySelectorAll('.stat').forEach(function (s) {
         const label = s.querySelector('.stat-label').textContent;
-        const b = s.querySelector('b');
+        const b = s.querySelector('.stat-value');
         const rb = b.getBoundingClientRect();
         const rs = s.getBoundingClientRect();
-        rects[label] = { x: rs.left, y: rs.top, w: rs.width, h: rs.height, textW: b.scrollWidth, boxW: rb.width, clipped: b.scrollWidth > Math.ceil(rb.width) + 1 };
+        rects[label] = { x: rs.left, y: rs.top, w: rs.width, h: rs.height, textW: b.scrollWidth, boxW: rb.width, overflow: b.scrollWidth > Math.ceil(rb.width) + 1 };
       });
       const keys = Object.keys(rects);
       const overlaps = [];
@@ -336,11 +337,31 @@ async function main() {
           if (!(a.x + a.w <= b2.x || b2.x + b2.w <= a.x || a.y + a.h <= b2.y || b2.y + b2.h <= a.y)) overlaps.push(keys[i] + ' × ' + keys[j]);
         }
       }
-      return { overlaps: overlaps, targetClipped: rects['目标'] ? rects['目标'].clipped : null, targetTextW: rects['目标'] ? rects['目标'].textW : 0, targetBoxW: rects['目标'] ? Math.round(rects['目标'].boxW) : 0 };
+      // 与画布左右对齐检查：统计栏左右内边距应一致，且整条贴合画布宽度
+      const statsRect = stats.getBoundingClientRect();
+      const wrapRect = canvasWrap.getBoundingClientRect();
+      const leftGap = Math.round(statsRect.left - wrapRect.left);
+      const rightGap = Math.round(wrapRect.right - statsRect.right);
+      // KPI 行是否铺满整行（最后一个 KPI 的右边缘接近统计栏内边界）
+      const kpiLabels = keys.filter(function (k) { return k !== '目标'; });
+      const kpiRight = Math.max.apply(null, kpiLabels.map(function (k) { return rects[k].x + rects[k].w; }));
+      const kpiRowFill = Math.round(((kpiRight - statsRect.left) / statsRect.width) * 100);
+      return {
+        overlaps: overlaps,
+        targetOverflow: rects['目标'] ? rects['目标'].overflow : null,
+        targetTextW: rects['目标'] ? rects['目标'].textW : 0,
+        targetBoxW: rects['目标'] ? Math.round(rects['目标'].boxW) : 0,
+        leftGap: leftGap, rightGap: rightGap, kpiRowFill: kpiRowFill,
+        statsWidth: Math.round(statsRect.width), wrapWidth: Math.round(wrapRect.width),
+      };
     })())`));
-    console.log(`   超长地址文本宽 ${layout.targetTextW} / 容器宽 ${layout.targetBoxW} · 截断=${layout.targetClipped} · 项目重叠=${layout.overlaps.length ? layout.overlaps.join('、') : '无'}`);
+    console.log(`   超长地址文本宽 ${layout.targetTextW} / 容器宽 ${layout.targetBoxW} · 溢出=${layout.targetOverflow} · 项目重叠=${layout.overlaps.length ? layout.overlaps.join('、') : '无'}`);
+    console.log(`   左右对齐：距画布左 ${layout.leftGap}px / 右 ${layout.rightGap}px（统计栏宽 ${layout.statsWidth}，画布宽 ${layout.wrapWidth}）· KPI 行铺满度 ${layout.kpiRowFill}%`);
     if (layout.overlaps.length) failures.push(`统计栏布局：项目重叠（${layout.overlaps.join('、')}）`);
-    if (layout.targetClipped !== true) failures.push('统计栏布局：超长目标地址未被截断，可能溢出遮挡相邻项');
+    // 目标行独占整行，长地址可以完整显示；关键是"不得溢出容器"，而不是必须截断
+    if (layout.targetOverflow) failures.push('统计栏布局：目标地址溢出容器，可能遮挡相邻项');
+    if (Math.abs(layout.leftGap - layout.rightGap) > 1) failures.push(`统计栏未与画布左右对齐（左 ${layout.leftGap}px / 右 ${layout.rightGap}px）`);
+    if (layout.kpiRowFill < 95) failures.push(`统计栏 KPI 行未铺满整行（铺满度 ${layout.kpiRowFill}%）`);
 
     if (consoleErrors.length) {
       console.log('\n页面脚本错误：');

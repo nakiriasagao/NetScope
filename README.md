@@ -266,8 +266,13 @@ node --test test/unit.test.js     # 仅单元测试（100 个用例，约 0.2 �
 node test/smoke-api.js            # 仅接口冒烟测试（需服务已启动）
 node test/browser-e2e.js          # 浏览器端到端测试（需 Chrome/Edge 与服务）
 node test/render-audit.js         # 地图渲染对抗性审计（需 Chrome/Edge 与服务）
+node test/layout-e2e.js           # 布局与投影验收：真实探测 + 截图（需 Chrome/Edge 与服务）
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
+
+`test/layout-e2e.js` 会真实追踪一次跨洲目标，断言**投影等比例**（经纬方向每度像素比必须为 1）、
+**统计栏与画布左右对齐**、**目标地址不溢出**、**连线不跨越未定位节点**，并输出
+`data/screenshots/final-map.png`（常规目标）与 `final-map-long-target.png`（超长地址）对照图。
 
 `test/browser-e2e.js` 会启动无头浏览器，真实加载页面、执行一次完整探测，并审计渲染结果（画布是否真的画出了陆地和连线、节点与表格数量、视图切换、缩放、命中测试、导出），同时收集所有 console 错误与未捕获异常，最后在 `data/screenshots/` 留下截图。
 

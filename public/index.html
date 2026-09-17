@@ -178,14 +178,18 @@
         <div class="canvas-wrap" id="canvas-wrap">
           <canvas id="map-canvas"></canvas>
           <svg id="node-overlay" class="node-overlay"></svg>
+          <!-- 统计栏：整条与画布左右对齐；目标行独占一行，长度自适应 -->
           <div class="map-stats" id="map-stats" hidden>
-            <div class="stat stat-wide"><span class="stat-label">目标</span><b id="stat-target" title="">—</b></div>
-            <div class="stat"><span class="stat-label">跳数</span><b id="stat-hops">—</b></div>
-            <div class="stat"><span class="stat-label">已定位</span><b id="stat-located">—</b></div>
-            <div class="stat"><span class="stat-label">未定位</span><b id="stat-unlocated">—</b></div>
-            <div class="stat"><span class="stat-label">总延迟</span><b id="stat-rtt">—</b></div>
-            <div class="stat"><span class="stat-label">国家/地区</span><b id="stat-countries">—</b></div>
-            <div class="stat"><span class="stat-label">地理跨度</span><b id="stat-distance">—</b></div>
+            <div class="stat stat-target-row">
+              <span class="stat-label">目标</span>
+              <b class="stat-value" id="stat-target">—</b>
+            </div>
+            <div class="stat"><span class="stat-label">跳数</span><b class="stat-value" id="stat-hops">—</b></div>
+            <div class="stat"><span class="stat-label">已定位</span><b class="stat-value" id="stat-located">—</b></div>
+            <div class="stat"><span class="stat-label">未定位</span><b class="stat-value" id="stat-unlocated">—</b></div>
+            <div class="stat"><span class="stat-label">总延迟</span><b class="stat-value" id="stat-rtt">—</b></div>
+            <div class="stat"><span class="stat-label">国家/地区</span><b class="stat-value" id="stat-countries">—</b></div>
+            <div class="stat"><span class="stat-label">跨度</span><b class="stat-value" id="stat-distance">—</b></div>
           </div>
           <div class="map-hint" id="map-hint">
             <p>输入一个 IP 或网址，开始绘制网络拓扑图</p>

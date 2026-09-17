@@ -23,12 +23,30 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 
+/* ------------------------------------------------------------------ */
+/* 画布尺寸                                                            */
+/* ------------------------------------------------------------------ */
+
 const WIDTH = 1440;
-const HEIGHT = 720;
 const LON_MIN = -180;
 const LON_MAX = 180;
 const LAT_MIN = -60; // 地图下边界取 -60°，与多数世界地图一致（避免南极被拉伸）
 const LAT_MAX = 85;
+
+/**
+ * 画布高度由"等比例"推导，保证经纬方向每度像素数一致（4 px/度）。
+ *
+ * 为什么必须这样算：
+ *   等距圆柱投影只有在 x/y 方向比例尺相同时才是"等距"的；
+ *   若高度随意取值（例如按 2:1 取 720），纬度方向会得到 4.97 px/度，
+ *   地图就会被纵向拉伸约 24%，看起来"被拉长且压扁"。
+ *
+ *   经度跨度 360°、宽度 1440px → 4 px/度；
+ *   纬度跨度 145°（-60~85）→ 高度 = 145 × 4 = 580px，与宽度同一比例尺。
+ */
+const HEIGHT = Math.round((WIDTH / (LON_MAX - LON_MIN)) * (LAT_MAX - LAT_MIN)); // 580
+const PX_PER_DEGREE = WIDTH / (LON_MAX - LON_MIN);
+
 
 const SOURCES = [
   'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/countries-110m.json',
@@ -67,7 +85,9 @@ function project(lon, lat) {
   const x = ((lon - LON_MIN) / (LON_MAX - LON_MIN)) * WIDTH;
   const clampedLat = Math.max(LAT_MIN, Math.min(LAT_MAX, lat));
   const y = ((LAT_MAX - clampedLat) / (LAT_MAX - LAT_MIN)) * HEIGHT;
-  return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+  // 保留一位小数：在 4 px/度的比例下相当于 0.025°（约 2.8 km）精度，
+  // 远高于 1:110m 数据本身的分辨率，同时能显著压缩文件体积
+  return [Math.round(x * 10) / 10, Math.round(y * 10) / 10];
 }
 
 /* ------------------------------------------------------------------ */
@@ -387,6 +407,9 @@ function build(topology) {
     lonMax: LON_MAX,
     latMin: LAT_MIN,
     latMax: LAT_MAX,
+    // 供前端校验/调试使用：经纬方向一致的比例尺
+    pxPerDegree: PX_PER_DEGREE,
+    aspectRatio: Math.round((WIDTH / HEIGHT) * 10000) / 10000,
     source: 'Natural Earth 1:110m（world-atlas TopoJSON）',
     generatedAt: new Date().toISOString(),
     stats: {

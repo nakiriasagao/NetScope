@@ -544,34 +544,43 @@ select {
   pointer-events: none;
 }
 
+/* 底部统计栏
+ *
+ * 设计要点：
+ *   1. 整条与画布左右对齐（左右各留 14px 外边距，随窗口自适应宽度）；
+ *   2. 第一行「目标」独占整行，地址再长也只会撑宽自己这一行，
+ *      不会挤压下面的 KPI，并且自动截断为省略号（悬停 title 看完整值）；
+ *   3. 其余 KPI 平分整行宽度，天然左右对齐；
+ *   4. 窄窗口下自动切换为两列，仍然对齐。
+ */
 .map-stats {
   position: absolute;
   left: 14px;
+  right: 14px;
   bottom: 14px;
   display: grid;
-  /* 固定列宽，避免某一项内容过长时把其它项挤变形 */
-  grid-template-columns: repeat(auto-fit, minmax(88px, 104px));
-  gap: 8px 14px;
-  align-items: start;
-  padding: 10px 12px;
-  background: rgba(11, 18, 32, 0.86);
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px 6px;
+  padding: 10px 14px;
+  background: rgba(11, 18, 32, 0.88);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   backdrop-filter: blur(6px);
-  max-width: calc(100% - 28px);
+  box-sizing: border-box;
 }
 
-/* 目标地址可能很长（IPv6 / 复杂域名），单独占两列并允许省略 */
-.stat-wide {
-  grid-column: span 2;
-  min-width: 0;
+/* 目标行：跨满所有列 */
+.stat-target-row {
+  grid-column: 1 / -1;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .stat {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0; /* 关键：允许子项收缩，否则内容会撑破网格 */
 }
 
 .stat-label {
@@ -579,23 +588,38 @@ select {
   color: var(--text-mute);
   letter-spacing: 0.5px;
   white-space: nowrap;
+  flex: 0 0 auto;
 }
 
-.stat b {
-  font-size: 14px;
+.stat-value {
+  font-size: 13.5px;
   font-family: var(--mono);
   color: var(--accent-2);
-  /* 关键修复：过长的目标地址必须能省略，否则会溢出并遮挡相邻的"跳数" */
-  display: block;
-  max-width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  /* 自适应长度：过长自动省略，绝不溢出到相邻项 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 非目标项不需要省略，但同样限制宽度防止挤压 */
-.stat:not(.stat-wide) b {
-  overflow: visible;
+.stat-target-row .stat-value {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+@media (max-width: 900px) {
+  .map-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 10px;
+    padding: 8px 10px;
+  }
+  .stat-label {
+    font-size: 10px;
+  }
+  .stat-value {
+    font-size: 12.5px;
+  }
 }
 
 .map-hint {
