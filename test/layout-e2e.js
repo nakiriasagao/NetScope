@@ -108,7 +108,8 @@ function getJSON(url, t = 8000) {
   console.log('目标显示:', JSON.stringify(a.targetText), '| 完整值:', JSON.stringify(a.targetFull), '| 溢出:', a.targetOverflow);
   console.log('拓扑: 跳点', a.hops, '| 已定位节点', a.nodes, '| 未定位', a.unlocated, '| 连线', a.arcs, '| 跨越未定位的连线', a.badArcs);
 
-  const outDir = path.join(__dirname, 'data', 'screenshots');
+  // 截图统一输出到项目根目录的 data/screenshots（该目录已在 .gitignore 中）
+  const outDir = path.join(__dirname, '..', 'data', 'screenshots');
   fs.mkdirSync(outDir, { recursive: true });
   let shot = await send('Page.captureScreenshot', { format: 'png' });
   fs.writeFileSync(path.join(outDir, 'final-map.png'), Buffer.from(shot.data, 'base64'));
