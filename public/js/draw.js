@@ -733,8 +733,12 @@
       if (this.options.showGrid) this.drawGraticule(ctx);
       if (this.options.night) this.drawNight(ctx);
       this.drawCountries(ctx);
-      // 国界之内再画一级行政区（省/州/地区）边界，让地图有内部结构
-      if (this.options.showAdmin1 !== false) this.drawAdmin1(ctx);
+      // 可选：国家内的一级行政区（省/州/地区）边界。
+      // 需要地图数据里带 provinces（构建时加 --admin1=50m 生成）。
+      // 默认关闭 —— 默认样式就是"按国家划分"。
+      if (this.options.showAdmin1 && this.world.provinces && this.world.provinces.length) {
+        this.drawAdmin1(ctx);
+      }
     } else {
       this.drawGraphBackground(ctx);
     }
