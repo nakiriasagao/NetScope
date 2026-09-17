@@ -71,35 +71,54 @@ function readAsset(assetKey) {
 }
 
 /**
- * 启动时把实际监听地址写入 public/js/runtime-config.js，
- * 这样即使前端页面是从 file:// 或其它端口打开的，也能自动找到 API。
+ * 记录当前实际监听地址（供动态生成 runtime-config.js 使用）
  *
- * 单文件模式下 public/ 可能是只读或不存在的，此时跳过写盘，
- * 改由内嵌资源里的 runtime-config.js 兜底（见 readAsset 调用处）。
+ * 这里**不再写盘**。原因：public/js/runtime-config.js 曾被当成普通静态文件
+ * 从磁盘读取，于是出现两个真实缺陷：
+ *   1. 打包进 dist/public/ 的那一份会把端口写死 —— 用户换端口启动后，
+ *      页面仍去连旧端口，表现为整个界面连不上后端；
+ *   2. 开发机上残留的旧文件会覆盖当前服务的地址（例如残留 :8897）。
+ * 因此改为**每次请求即时生成**，见 serveRuntimeConfig()。
  */
+let runtimeAddress = null;
+
 function writeRuntimeConfig(address) {
-  const target = path.join(config.publicDir, 'js', 'runtime-config.js');
-  const content = runtimeConfigContent(address);
-  try {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, 'utf8');
-  } catch (error) {
-    if (!isSeaRuntime()) console.warn(`[warn] 无法写入 runtime-config.js: ${error.message}`);
-  }
-  return target;
+  runtimeAddress = address;
+  return null;
 }
 
-/** runtime-config.js 的内容 */
+/** runtime-config.js 的内容（address 省略时用当前监听地址） */
 function runtimeConfigContent(address) {
+  const base = address || runtimeAddress || `http://${config.http.host}:${config.http.port}`;
   return `/* 由 NetScope 服务端自动生成，勿手工修改 */\nwindow.NETSCOPE_RUNTIME = ${JSON.stringify(
     {
-      apiBase: address,
+      apiBase: base,
       version: require('../package.json').version,
       generatedAt: new Date().toISOString(),
     },
     null,
     2,
   )};\n`;
+}
+
+/**
+ * 返回 runtime-config.js
+ *
+ * 这个文件是**生成物**：无论磁盘上是否存在同名文件，都以当前监听地址为准，
+ * 并且禁用缓存，避免换端口后页面仍连旧地址。
+ */
+function serveRuntimeConfig(req, res, origin) {
+  const body = Buffer.from(runtimeConfigContent(origin), 'utf8');
+  res.writeHead(200, {
+    'Content-Type': MIME_TYPES['.js'],
+    'Content-Length': body.length,
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+    ...corsHeaders(),
+  });
+  res.end(req.method === 'HEAD' ? undefined : body);
+  return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -126,11 +145,31 @@ function safeJoin(root, urlPath) {
   return full;
 }
 
+/**
+ * 由请求推断页面来源（用于 runtime-config.js 的 apiBase）
+ *
+ * 优先用 Host 头，这样无论用户从 127.0.0.1、localhost 还是局域网 IP 打开，
+ * 前端都能连到正确的地址；Host 缺失时回落到实际监听地址。
+ */
+function requestOrigin(req) {
+  const host = req && req.headers ? String(req.headers.host || '').trim() : '';
+  if (host) return `http://${host}`;
+  return runtimeAddress || `http://${config.http.host}:${config.http.port}`;
+}
+
 /** 是否已经向浏览器发送过"清理缓存"指令（服务进程内只发一次） */
 let cachePurgeSent = false;
 
 function serveStatic(req, res) {
   const urlPath = pathOnly(req.url);
+
+  // runtime-config.js 是生成物，**不读磁盘**：磁盘上可能存在陈旧副本
+  // （例如打包进 dist/public 的那份会把端口写死），一律以当前监听地址为准。
+  if (urlPath === '/js/runtime-config.js') {
+    serveRuntimeConfig(req, res, requestOrigin(req));
+    return;
+  }
+
   const filePath = safeJoin(config.publicDir, urlPath === '/' ? '/index.html' : urlPath);
   if (!filePath) {
     sendError(res, 403, '非法路径');
@@ -169,18 +208,7 @@ function serveAsset(req, res, urlPath) {
 
   let key = pathOnly(urlPath).replace(/^\/+/, '');
   if (!key) key = 'index.html';
-  if (key === 'js/runtime-config.js') {
-    // 内嵌模式下 public/ 只读：这个文件按当前监听地址即时生成
-    const body = Buffer.from(runtimeConfigContent(`http://${req.headers.host || '127.0.0.1'}`), 'utf8');
-    res.writeHead(200, {
-      'Content-Type': MIME_TYPES['.js'],
-      'Content-Length': body.length,
-      'Cache-Control': 'no-cache',
-      ...corsHeaders(),
-    });
-    res.end(req.method === 'HEAD' ? undefined : body);
-    return true;
-  }
+  // runtime-config.js 已在 serveStatic 里统一处理（动态生成、不读磁盘/内嵌资源）
 
   const body = readAsset(key);
   if (!body) return false;
@@ -422,7 +450,9 @@ if (require.main === module) {
     })
     .catch((error) => {
       if (error.code === 'EADDRINUSE') {
-        console.error(`\n[错误] 端口 ${config.http.port} 已被占用。请换一个端口，例如：node src/server.js --port 8899\n`);
+        // 提示实际尝试的端口（而不是配置默认值），否则换了 --port 仍显示 8787，容易误导
+        const tried = args.port !== undefined ? args.port : config.http.port;
+        console.error(`\n[错误] 端口 ${tried} 已被占用。请换一个端口，例如：node src/server.js --port ${Number(tried) + 1}\n`);
       } else {
         console.error(`\n[错误] 服务启动失败：${error.message}\n`);
       }
