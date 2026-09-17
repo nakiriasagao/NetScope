@@ -13,7 +13,7 @@ node test/run-tests.js --list                    # 查看全部可用名称
 node test/run-tests.js --all                     # 全量（仅用户明确要求时）
 ```
 
-- 全量 18 项约 5 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
+- 全量 19 项约 6 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
   例如：改了 `draw.js` 的着色 → `color`；改了底图/视图逻辑 →
   `viewswitch,keepview,lanlock,amaptobuiltin,matrix`；改了地图数据/渲染 → `mapstyle`；
   改了地图数据加载/服务端静态资源 → `cache,smoke`。
@@ -43,8 +43,9 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 | `lanlock` | 局域网锁定世界地图 | 是 |
 | `amaptobuiltin` | 高德逻辑拓扑切回内置地图（含底图初始化竞态） | 是 |
 | `matrix` | 视图×底图全组合矩阵（21 条路径，状态残留类缺陷的兜底） | 是 |
+| `bundle` | 打包产物验收（启动 exe + 校验 APK，需先构建） | 否 |
 
-分组：`core`（unit, smoke, cache）、`map`（全部地图/底图/拓扑类）。
+分组：`core`（unit, smoke, cache）、`pack`（打包产物）、`map`（全部地图/底图/拓扑类）。
 
 ## 服务与调试
 
@@ -57,10 +58,25 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 
 ## 环境注意事项（Windows）
 
-- npm 的 `.ps1` 被组策略拦截 → **直接用 `node`**，不要用 `npm`。
+- npm 的 `.ps1` 被组策略拦截 → **直接用 `node`**，不要用 `npm`/`npx`。
+  需要某个 npm 包时用自带的 `tools/fetch-npm-package.js`（直接下载 tarball 并解包），
+  例如 exe 打包所需的 postject 就是这样装到 `build/tools` 的。
+- Node 24 在 Windows 上 `spawnSync` 直接调用 `.bat`/`.cmd` 会返回 `EINVAL`，
+  必须用 `shell: true`（见 `tools/build-apk.js` 的 `run()`）。
 - PowerShell 里 `node -e "..."` 的引号极易出错 → **写成临时 `.js` 文件再执行**，
   且不要用 `Get-Content`/`Set-Content` 做文件内容往返（会破坏编码）。
 - 多行提交信息用 `git commit -F <文件>`，不要用 `git commit -m "多行"`。
+
+## 打包（Windows exe / Android APK）
+
+- `node tools/build-exe.js` → `dist/netscope.exe`：
+  先用 `tools/bundle.js` 把 `src/` 打成单文件（SEA 的 require 只支持内置模块，
+  相对路径 require 会抛 `ERR_UNKNOWN_BUILTIN_MODULE`），再用 postject 注入。
+  `public/` 必须与 exe 同级分发。
+- `node tools/build-apk.js` → `dist/android/netscope-1.0.0.apk`：
+  直接调用 aapt2 / javac / d8 / zipalign / apksigner，**不使用 Gradle**。
+  工具链由 `tools/fetch-android-tools.js` 下载到 `build/android-sdk`。
+- 改完打包相关代码后跑 `node test/run-tests.js --only=bundle`。
 
 ## 代码约定
 
