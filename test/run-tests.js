@@ -55,6 +55,7 @@ const CACHE_FILE = path.join(__dirname, 'map-cache-e2e.js');
 const MAP_STYLE_FILE = path.join(__dirname, 'map-style-e2e.js');
 const AMAP_TO_BUILTIN_FILE = path.join(__dirname, 'amap-graph-to-builtin-e2e.js');
 const MATRIX_FILE = path.join(__dirname, 'basemap-matrix-e2e.js');
+const PACKAGE_FILE = path.join(__dirname, 'package-e2e.js');
 
 /**
  * 测试注册表：name → { file, title, kind, group }
@@ -79,12 +80,14 @@ const REGISTRY = {
   amaptobuiltin: { file: AMAP_TO_BUILTIN_FILE, title: '高德逻辑拓扑切回内置地图', kind: 'script', group: 'map', browser: true, amap: true },
   matrix: { file: MATRIX_FILE, title: '视图×底图全组合', kind: 'script', group: 'map', browser: true, amap: true },
   cache: { file: CACHE_FILE, title: '地图数据缓存行为', kind: 'script', group: 'core' },
+  bundle: { file: PACKAGE_FILE, title: '打包产物验收（exe + APK）', kind: 'script', group: 'pack' },
 };
 
 const GROUPS = {
   core: ['unit', 'smoke', 'cache'],
+  pack: ['bundle'],
   map: ['lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
-  all: ['unit', 'smoke', 'cache', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
+  all: ['unit', 'smoke', 'cache', 'bundle', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
 };
 
 /** 解析 --only= / --list / --all */
