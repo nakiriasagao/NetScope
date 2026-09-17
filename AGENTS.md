@@ -13,10 +13,11 @@ node test/run-tests.js --list                    # 查看全部可用名称
 node test/run-tests.js --all                     # 全量（仅用户明确要求时）
 ```
 
-- 全量 19 项约 6 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
+- 全量 20 项约 6 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
   例如：改了 `draw.js` 的着色 → `color`；改了底图/视图逻辑 →
   `viewswitch,keepview,lanlock,amaptobuiltin,matrix`；改了地图数据/渲染 → `mapstyle`；
-  改了地图数据加载/服务端静态资源 → `cache,smoke`。
+  改了地图数据加载/服务端静态资源 → `cache,smoke`；
+  改了打包或 Android 代码 → `bundle,android`。
   **改动涉及"视图/底图/模式"状态机时，务必跑 `matrix`** —— 单一场景测试
   容易漏掉状态残留类缺陷。
 - 单个测试文件也可以直接 `node test/xxx-e2e.js`。
@@ -44,6 +45,7 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 | `amaptobuiltin` | 高德逻辑拓扑切回内置地图（含底图初始化竞态） | 是 |
 | `matrix` | 视图×底图全组合矩阵（21 条路径，状态残留类缺陷的兜底） | 是 |
 | `bundle` | 打包产物验收（启动 exe + 校验 APK，需先构建） | 否 |
+| `android` | 手机端后端桌面验证（纯 Java，脱离 Android 运行） | 否 |
 
 分组：`core`（unit, smoke, cache）、`pack`（打包产物）、`map`（全部地图/底图/拓扑类）。
 
@@ -73,10 +75,24 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
   先用 `tools/bundle.js` 把 `src/` 打成单文件（SEA 的 require 只支持内置模块，
   相对路径 require 会抛 `ERR_UNKNOWN_BUILTIN_MODULE`），再用 postject 注入。
   `public/` 必须与 exe 同级分发。
-- `node tools/build-apk.js` → `dist/android/netscope-1.0.0.apk`：
+- `node tools/build-apk.js` → `dist/android/netscope-1.1.0.apk`：
   直接调用 aapt2 / javac / d8 / zipalign / apksigner，**不使用 Gradle**。
   工具链由 `tools/fetch-android-tools.js` 下载到 `build/android-sdk`。
-- 改完打包相关代码后跑 `node test/run-tests.js --only=bundle`。
+  前端资源通过 aapt2 的 `-A assets` 打进 APK 的 `assets/web/`；
+  注意 Windows 上 aapt2 写出的 ZIP 条目可能是**反斜杠路径**，校验时要兼容两种分隔符。
+- 改完打包相关代码后跑 `node test/run-tests.js --only=bundle,android`。
+
+## 手机端架构（Android 独立运行）
+
+- 手机端**不需要电脑**：应用内启动 HTTP 服务（`core/NetHttpd` + `core/NetApi`），
+  探测由 `core/Probe.java` 在本机完成，WebView 加载 `http://127.0.0.1:<port>/`。
+- `android/java/com/netscope/app/core/` 下的类**不得引用任何 Android API**
+  （环境信息通过 `Env.setInfo()` 从 `NetScopeApp` 注入，`ServerInfo` 接口解耦 HTTP 实现）。
+  这样 `test/android-backend-verify.js` 才能在桌面 JVM 上直接验证整个后端。
+- 平台限制要**如实呈现**，绝不伪造数据：Android 无 root 时拿不到中间路由器 IP，
+  引擎只给出目标、RTT 与由回弹 TTL 推算的跳数距离，并在 notes 里说明原因。
+- 桌面 exe 的窗口行为：用浏览器 `--app` 模式打开独立窗口，**关窗即退出进程**；
+  改 `src/sea-entry.js` 的窗口逻辑后要实测"关窗即停"。
 
 ## 代码约定
 
