@@ -3,22 +3,31 @@
 /**
  * NetScope 测试汇总入口（零第三方依赖）
  *
- * 用法：
- *   cd D:\DSH\NetScope
- *   node test/run-tests.js            # 单元测试 + 接口冒烟 +（可选）局域网/高德验收
- *   npm test                          # 等价（package.json scripts.test）
+ * ⚠ 默认请用「增量测试」：只运行与本次改动相关的用例，几秒到几十秒即可完成。
  *
- * 行为：
- *   1. 依次运行 test/unit.test.js（node:test）与 test/smoke-api.js（真实 HTTP 冒烟）；
- *   2. 冒烟测试需要 NetScope 服务在 127.0.0.1:8787（可用 NS_BASE 覆盖）运行；
- *      探测不到服务时打印提示并「跳过」，而不是判定失败；
- *   3. 需要浏览器的验收（局域网拓扑、高德底图）默认不跑，用 NS_WITH_BROWSER=1 打开；
- *   4. 输出总体结论，并以合适的 exit code 退出（0=全部通过/按需跳过，1=有失败）。
+ * 用法：
+ *   node test/run-tests.js --only=unit          # 只跑单元测试（最快，改纯逻辑必备）
+ *   node test/run-tests.js --only=unit,color    # 跑多个
+ *   node test/run-tests.js --list               # 列出所有可用的测试名
+ *   node test/run-tests.js --only=map           # 按分组跑（map=地图/底图/拓扑类）
+ *   node test/run-tests.js --all                # 全量测试（含浏览器验收，耗时较长，仅在发布前跑）
+ *   node test/run-tests.js                      # 默认：单元测试 + 接口冒烟（不跑浏览器）
+ *
+ * 测试名（--only= 可用的值）：
+ *   unit      单元测试                     smoke     接口冒烟
+ *   lan       局域网拓扑验收               color     节点着色规则
+ *   amap      高德底图验收                 switch    底图切换与跳数标签
+ *   style     图例与样式一致性             lantrace  局域网扫描后再探测
+ *   viewswitch 视图切换与底图保持          topoperf  两种拓扑显示与性能
+ *   graphtrace 探测外网的逻辑拓扑          amapgraph 高德底图的逻辑拓扑
+ *   keepview  切底图保持视图               lanlock   局域网锁定世界地图
+ *   map       地图/底图/拓扑类（以上浏览器用例的合集）
+ *   all       全部
  *
  * 环境变量：
  *   NS_BASE=http://127.0.0.1:8787   服务地址（冒烟与浏览器验收共用）
  *   NS_SKIP_SMOKE=1                 强制跳过冒烟测试
- *   NS_WITH_BROWSER=1               额外运行局域网拓扑与高德底图验收（需 Chrome/Edge）
+ *   NS_WITH_BROWSER=1               等价于 --only=all
  *   NS_AMAP_KEY / NS_AMAP_SECURITY  高德凭据（不传则从服务端配置读取，读不到则跳过）
  */
 
@@ -41,10 +50,66 @@ const TOPO_PERF_FILE = path.join(__dirname, 'topology-perf-e2e.js');
 const GRAPH_TRACE_FILE = path.join(__dirname, 'graph-trace-e2e.js');
 const AMAP_GRAPH_FILE = path.join(__dirname, 'amap-graph-e2e.js');
 const KEEP_VIEW_FILE = path.join(__dirname, 'basemap-keep-view-e2e.js');
+const LAN_LOCK_FILE = path.join(__dirname, 'lan-lock-view-e2e.js');
+const ADMIN1_FILE = path.join(__dirname, 'admin1-map-e2e.js');
+
+/**
+ * 测试注册表：name → { file, title, kind, group }
+ * kind: 'node' 用 node --test 运行；'script' 直接运行（退出码即结论）
+ */
+const REGISTRY = {
+  unit: { file: UNIT_FILE, title: '单元测试', kind: 'node', group: 'core' },
+  smoke: { file: SMOKE_FILE, title: '接口冒烟', kind: 'node', group: 'core' },
+  lan: { file: LAN_FILE, title: '局域网拓扑验收', kind: 'script', group: 'map', browser: true },
+  color: { file: COLOR_FILE, title: '节点着色规则', kind: 'script', group: 'map', browser: true },
+  amap: { file: AMAP_FILE, title: '高德底图验收', kind: 'script', group: 'map', browser: true, amap: true },
+  switch: { file: SWITCH_FILE, title: '底图切换与跳数标签', kind: 'script', group: 'map', browser: true, amap: true },
+  style: { file: STYLE_FILE, title: '图例与样式一致性', kind: 'script', group: 'map', browser: true, amap: true },
+  lantrace: { file: LAN_TRACE_FILE, title: '局域网扫描后再探测', kind: 'script', group: 'map', browser: true, amap: true },
+  viewswitch: { file: VIEW_SWITCH_FILE, title: '视图切换与底图保持', kind: 'script', group: 'map', browser: true, amap: true },
+  topoperf: { file: TOPO_PERF_FILE, title: '两种拓扑显示与性能', kind: 'script', group: 'map', browser: true },
+  graphtrace: { file: GRAPH_TRACE_FILE, title: '探测外网的逻辑拓扑', kind: 'script', group: 'map', browser: true, amap: true },
+  amapgraph: { file: AMAP_GRAPH_FILE, title: '高德底图的逻辑拓扑', kind: 'script', group: 'map', browser: true, amap: true },
+  keepview: { file: KEEP_VIEW_FILE, title: '切底图保持视图', kind: 'script', group: 'map', browser: true, amap: true },
+  lanlock: { file: LAN_LOCK_FILE, title: '局域网锁定世界地图', kind: 'script', group: 'map', browser: true },
+  admin1: { file: ADMIN1_FILE, title: '世界地图地区划分', kind: 'script', group: 'map', browser: true },
+};
+
+const GROUPS = {
+  core: ['unit', 'smoke'],
+  map: ['lan', 'color', 'admin1', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock'],
+  all: ['unit', 'smoke', 'lan', 'color', 'admin1', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock'],
+};
+
+/** 解析 --only= / --list / --all */
+function parseSelection(argv) {
+  if (argv.includes('--list')) return { list: true, names: [] };
+  const onlyArg = argv.find((a) => a.startsWith('--only='));
+  if (onlyArg) {
+    const raw = onlyArg.slice('--only='.length).trim();
+    const names = [];
+    for (const token of raw.split(/[,+\s]+/).filter(Boolean)) {
+      if (GROUPS[token]) names.push(...GROUPS[token]);
+      else if (REGISTRY[token]) names.push(token);
+      else {
+        console.error(`未知测试名：「${token}」`);
+        console.error('可用名称：' + Object.keys(REGISTRY).join(', '));
+        console.error('可用分组：' + Object.keys(GROUPS).join(', '));
+        process.exit(2);
+      }
+    }
+    return { list: false, names: [...new Set(names)] };
+  }
+  if (argv.includes('--all')) return { list: false, names: GROUPS.all };
+  if (/^(1|true|yes|on)$/i.test(process.env.NS_WITH_BROWSER || '')) return { list: false, names: GROUPS.all };
+  // 默认：核心两项（快）
+  return { list: false, names: GROUPS.core };
+}
+
+const SELECTION = parseSelection(process.argv.slice(2));
 
 const BASE = process.env.NS_BASE || 'http://127.0.0.1:8787';
 const SKIP_SMOKE = /^(1|true|yes|on)$/i.test(process.env.NS_SKIP_SMOKE || '');
-const WITH_BROWSER = /^(1|true|yes|on)$/i.test(process.env.NS_WITH_BROWSER || '');
 
 // 单文件最长执行时间（毫秒）：防止极端情况下挂死
 const UNIT_TIMEOUT_MS = 5 * 60 * 1000;
@@ -155,131 +220,93 @@ function describeOutcome(item) {
 }
 
 (async () => {
-  const total = WITH_BROWSER ? 13 : 2;
-  say('==================== NetScope 测试汇总 ====================');
-  say(`Node: ${process.version}    项目: ${ROOT}`);
-  say(`模式: ${WITH_BROWSER ? '含浏览器验收（局域网拓扑 + 高德底图）' : '仅单元测试 + 接口冒烟（NS_WITH_BROWSER=1 可开启浏览器验收）'}`);
-  say('');
-
-  /* ---------- 1. 单元测试 ---------- */
-  say(`---------------- [1/${total}] 单元测试 (test/unit.test.js) ----------------`);
-  if (!fs.existsSync(UNIT_FILE)) {
-    results.push({ name: '单元测试', skipped: true, reason: 'test/unit.test.js 不存在' });
-    say('！ 未找到 test/unit.test.js，跳过。');
-  } else {
-    const r = runTestFile(UNIT_FILE, UNIT_TIMEOUT_MS);
-    results.push({ name: '单元测试 (test/unit.test.js)', ...r });
+  if (SELECTION.list) {
+    say('==================== 可用测试 ====================');
+    for (const [name, meta] of Object.entries(REGISTRY)) {
+      const exists = fs.existsSync(meta.file) ? '' : '  （文件不存在）';
+      say(`  ${name.padEnd(11)} ${meta.title}${meta.browser ? '  [需浏览器]' : ''}${exists}`);
+    }
+    say('');
+    say('分组：');
+    for (const [name, members] of Object.entries(GROUPS)) {
+      if (name === 'all') continue;
+      say(`  ${name.padEnd(6)} = ${members.join(', ')}`);
+    }
+    say('');
+    say('示例：node test/run-tests.js --only=unit,color');
+    process.exitCode = 0;
+    return;
   }
+
+  const names = SELECTION.names;
+  const total = names.length;
+  const isFull = names.length === GROUPS.all.length;
+  say('==================== NetScope 测试 ====================');
+  say(`Node: ${process.version}    项目: ${ROOT}`);
+  say(`范围: ${isFull ? '全量（发布前使用）' : '增量（' + names.join(', ') + '）'}`);
   say('');
 
-  /* ---------- 2. 接口冒烟 ---------- */
-  say(`---------------- [2/${total}] 接口冒烟 (test/smoke-api.js) ----------------`);
+  // 是否需要探测服务（冒烟或浏览器用例）
+  const needServer = names.some((n) => n === 'smoke' || (REGISTRY[n] && REGISTRY[n].browser));
   let serverReady = false;
-  if (!fs.existsSync(SMOKE_FILE)) {
-    results.push({ name: '接口冒烟', skipped: true, reason: 'test/smoke-api.js 不存在' });
-    say('！ 未找到 test/smoke-api.js，跳过。');
-  } else if (SKIP_SMOKE) {
-    results.push({ name: '接口冒烟', skipped: true, reason: 'NS_SKIP_SMOKE 已开启' });
-    say('⊘ 已通过 NS_SKIP_SMOKE 强制跳过冒烟测试。');
-  } else {
+  if (needServer) {
     const probe = await checkServer(BASE);
     serverReady = probe.ok;
     if (!probe.ok) {
-      results.push({ name: '接口冒烟', skipped: true, reason: probe.reason });
-      say(`⊘ 跳过冒烟测试：${probe.reason}`);
-      say('  冒烟测试需要 NetScope 服务处于运行状态，请先启动：');
-      say('      node src/server.js            # 默认监听 127.0.0.1:8787');
-      say('  或在其它端口启动后用 NS_BASE 指定，例如：');
-      say("      $env:NS_BASE='http://127.0.0.1:9000'; node test/run-tests.js");
-      say('  注意：冒烟测试会真实访问网络（DNS / ICMP / TCP），耗时可能较长。');
-    } else {
-      say(`✔ 检测到服务：${BASE}（${probe.detail}），开始冒烟测试…`);
-      say('');
-      const r = runTestFile(SMOKE_FILE, SMOKE_TIMEOUT_MS);
-      results.push({ name: '接口冒烟 (test/smoke-api.js)', ...r });
-    }
-  }
-  say('');
-
-  /* ---------- 3/4. 浏览器验收（可选） ---------- */
-  if (WITH_BROWSER) {
-    const browserCases = [
-      { index: 3, file: LAN_FILE, name: '局域网拓扑验收 (test/lan-topology-e2e.js)', args: [BASE] },
-      { index: 4, file: COLOR_FILE, name: '节点着色规则 (test/node-color-check.js)', args: [BASE] },
-      {
-        index: 5,
-        file: AMAP_FILE,
-        name: '高德底图验收 (test/amap-e2e.js)',
-        args: [process.env.NS_AMAP_KEY || '', process.env.NS_AMAP_SECURITY || '', BASE],
-      },
-      {
-        index: 6,
-        file: SWITCH_FILE,
-        name: '底图切换与跳数标签 (test/map-switch-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 7,
-        file: STYLE_FILE,
-        name: '图例与样式一致性 (test/style-consistency-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 8,
-        file: LAN_TRACE_FILE,
-        name: '局域网扫描后再探测 (test/lan-then-trace-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 9,
-        file: VIEW_SWITCH_FILE,
-        name: '视图切换与底图保持 (test/view-switch-basemap-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 10,
-        file: TOPO_PERF_FILE,
-        name: '两种拓扑显示与性能 (test/topology-perf-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 11,
-        file: GRAPH_TRACE_FILE,
-        name: '探测外网的逻辑拓扑 (test/graph-trace-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 12,
-        file: AMAP_GRAPH_FILE,
-        name: '高德底图的逻辑拓扑 (test/amap-graph-e2e.js)',
-        args: [BASE],
-      },
-      {
-        index: 13,
-        file: KEEP_VIEW_FILE,
-        name: '切底图保持视图 (test/basemap-keep-view-e2e.js)',
-        args: [BASE],
-      },
-    ];
-    for (const item of browserCases) {
-      say(`---------------- [${item.index}/${total}] ${item.name} ----------------`);
-      if (!fs.existsSync(item.file)) {
-        results.push({ name: item.name, skipped: true, reason: '测试文件不存在' });
-        say('！ 测试文件不存在，跳过。');
-      } else if (!serverReady) {
-        results.push({ name: item.name, skipped: true, reason: '服务未运行' });
-        say('⊘ 服务未运行，跳过。');
+      if (names.includes('smoke')) {
+        say(`⊘ 服务未运行（${probe.reason}），冒烟测试将跳过。`);
+        say('  启动服务：node src/server.js        # 默认 127.0.0.1:8787');
       } else {
-        const r = runScript(item.file, item.args, BROWSER_TIMEOUT_MS);
-        if (r.status === 0) {
-          results.push({ name: item.name, ...r });
-        } else {
-          // 高德未配置时脚本会自行打印 SKIP 并以 0 退出，所以非 0 即真实失败
-          results.push({ name: item.name, ...r });
-        }
+        say(`⊘ 服务未运行（${probe.reason}），浏览器验收无法执行 —— 请先启动服务。`);
       }
       say('');
+    } else {
+      say(`✔ 服务可用：${BASE}（${probe.detail}）`);
+      say('');
     }
+  }
+
+  let step = 0;
+  for (const name of names) {
+    step += 1;
+    const meta = REGISTRY[name];
+    const label = `${meta.title} (${path.relative(ROOT, meta.file)})`;
+    say(`---------------- [${step}/${total}] ${label} ----------------`);
+
+    if (!fs.existsSync(meta.file)) {
+      results.push({ name: label, skipped: true, reason: '测试文件不存在' });
+      say('！ 测试文件不存在，跳过。');
+      say('');
+      continue;
+    }
+    if (name === 'smoke' && SKIP_SMOKE) {
+      results.push({ name: label, skipped: true, reason: 'NS_SKIP_SMOKE 已开启' });
+      say('⊘ 已通过 NS_SKIP_SMOKE 强制跳过。');
+      say('');
+      continue;
+    }
+    if (meta.browser && !serverReady) {
+      results.push({ name: label, skipped: true, reason: '服务未运行' });
+      say('⊘ 服务未运行，跳过。');
+      say('');
+      continue;
+    }
+    if (name === 'smoke' && !serverReady) {
+      results.push({ name: label, skipped: true, reason: '服务未运行' });
+      say('⊘ 服务未运行，跳过。');
+      say('');
+      continue;
+    }
+
+    let args = [];
+    if (name === 'amap') args = [process.env.NS_AMAP_KEY || '', process.env.NS_AMAP_SECURITY || '', BASE];
+    else if (meta.browser) args = [BASE];
+
+    const r = meta.kind === 'node'
+      ? runTestFile(meta.file, name === 'smoke' ? SMOKE_TIMEOUT_MS : UNIT_TIMEOUT_MS)
+      : runScript(meta.file, args, BROWSER_TIMEOUT_MS);
+    results.push({ name: label, ...r });
+    say('');
   }
 
   /* ---------- 汇总 ---------- */
