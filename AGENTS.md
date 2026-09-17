@@ -13,13 +13,14 @@ node test/run-tests.js --list                    # 查看全部可用名称
 node test/run-tests.js --all                     # 全量（仅用户明确要求时）
 ```
 
-- 全量 22 项约 7 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
+- 全量 23 项约 7 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
   例如：改了 `draw.js` 的着色 → `color`；改了底图/视图逻辑 →
   `viewswitch,keepview,lanlock,amaptobuiltin,matrix`；改了地图数据/渲染 → `mapstyle`；
   改了地图数据加载/服务端静态资源 → `cache,smoke`；
   改了打包或 Android 代码 → `bundle,android`；
   改了高德凭据或底图设置持久化 → `amappersist,deskpersist,matrix`；
-  改了 runtime-config 或静态资源服务 → `bundle,cache,smoke`。
+  改了 runtime-config 或静态资源服务 → `bundle,cache,smoke`；
+  改了 traceroute 判定/定位/终点绘制 → `unreached,unit,graphtrace,matrix`。
   **改动涉及"视图/底图/模式"状态机时，务必跑 `matrix`** —— 单一场景测试
   容易漏掉状态残留类缺陷。
 - 单个测试文件也可以直接 `node test/xxx-e2e.js`。
@@ -28,7 +29,7 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 
 | 名称 | 说明 | 需浏览器 |
 | --- | --- | --- |
-| `unit` | 单元测试（106 用例） | 否 |
+| `unit` | 单元测试（107 用例） | 否 |
 | `smoke` | 接口冒烟（12 项，会真实访问网络） | 否 |
 | `cache` | 世界地图数据缓存行为（ETag / 304 / 前端不再 force-cache） | 否 |
 | `lan` | 局域网拓扑验收（真实扫描） | 是 |
@@ -50,8 +51,13 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 | `android` | 手机端后端桌面验证（纯 Java，脱离 Android 运行） | 否 |
 | `amappersist` | 高德 Key 持久化（新窗口无本地缓存） | 是 |
 | `deskpersist` | 桌面版设置持久化（跨重启保留，需已构建 exe） | 是 |
+| `unreached` | 未到达目标时的显示正确性（目标过滤探测的场景） | 是 |
 
 分组：`core`（unit, smoke, cache）、`pack`（打包产物 + deskpersist）、`map`（全部地图/底图/拓扑类）。
+
+> 浏览器类测试的第一个参数是**服务地址**（由测试运行器传入），
+> **不要**再把 `argv[2]` 当成别的东西；其它参数用环境变量传
+> （例如 `NS_UNREACHED_TARGET`）。新增浏览器测试务必沿用这个约定。
 
 ## 服务与调试
 
@@ -116,6 +122,22 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 3. 前端凭据解析要**双来源**：先读 localStorage，缺失时回落到服务端
    `data/amap-config.json`（`GET /api/amap/config?includePlain=1`，仅回环可用）。
    只看 localStorage 会在 exe 新窗口场景误报"未配置 Key"。
+
+## traceroute 的"到达判定"（易错点）
+
+- **`reachedTarget` ≠ 命令跑完**。Windows 的 tracert 即使 30 跳全部超时也会打印
+  「跟踪完成」，`complete` 只表示命令正常结束。两者混淆曾导致：轨迹断在广州
+  骨干网时，界面把广州标成"最终目的地"（江苏的 IP 被画到广州）。
+  现在 `summary` 分开给出 `reachedTarget`（真正到达）与 `commandCompleted`（命令结束），
+  另有 `lastRespondedIP`（最后一个有响应的节点，可能只是中间路由器）。
+- 前端**不能**把"最后一个有定位的节点"当成目标。目标节点由服务端的
+  `hop.isDestination` 决定；未到达时用目标 IP 自己的定位补一个
+  `isUnconfirmedDestination` 节点，并用**虚线**连接，同时显示
+  `#trace-notice` 说明条（文案在 `trace.unreached.reason`）。
+- **目标 IP 必须一起做地理定位**。目标常被过滤探测而不出现在跳点里；
+  若只定位跳点，前端就没有目标坐标，画不出终点。
+  （`startTraceTask` 里的 `geoIPs` 必须包含 `targetIP`。）
+- 私有地址由 `applyPrivateAnchor` 按公网出口落点，**只影响私有 IP**，公网不受影响。
 
 ## 代码约定
 
