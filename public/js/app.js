@@ -369,7 +369,7 @@
       // 否则渲染尺寸仍是旧值（或在极端情况下取不到父元素）
       renderer.resize();
       if (state.lan && renderer.lanMode && state.lan.topology) renderer.setLanTopology(state.lan.topology);
-      else if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+      else if (state.hops.length) drawCurrentTrace();
       else renderer.fitToContainer();
       updateBaseMapStatus();
       return Promise.resolve();
@@ -451,7 +451,7 @@
           /* ignore */
         }
         renderer.resize();
-        if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+        if (state.hops.length) drawCurrentTrace();
         updateBaseMapStatus('加载失败，已回退');
         if (!opts.silent) {
           toast('高德地图加载失败：' + escapeHtml(error.message) + '<br/>已回退到内置世界地图', 'error', 12000);
@@ -1161,15 +1161,12 @@
     state.portScan = null;
     state.engine = null;
     state.fallbackNotes = [];
-    // 退出局域网星型拓扑模式，并把视图复位为世界地图：
-    // 否则"扫描局域网 → 再探测新目标"会一直停留在逻辑拓扑视图，
-    // 表现为"看不到世界地图"（底图切回内置也没用）
+    // 退出局域网星型拓扑模式（否则"扫描局域网 → 再探测新目标"会一直画星型拓扑），
+    // 但**尊重用户在探测前选择的视图**（世界地图 / 逻辑拓扑）——
+    // 早期实现这里强行把视图复位为世界地图，导致"逻辑拓扑视图下探测外网"
+    // 结果被画成按坐标合并的世界地图拓扑。
     renderer.lanMode = false;
     state.lan = null;
-    state.view = 'map';
-    document.querySelectorAll('[data-view]').forEach(function (button) {
-      button.classList.toggle('is-active', button.getAttribute('data-view') === 'map');
-    });
     if (amapView) amapView.setTrace([], {});
     else renderer.setTrace([], {});
     renderer.setSelected(null);
@@ -1224,9 +1221,9 @@
             received = payload.to || state.hops.length;
             total = payload.total || received;
             setProgress(20 + (received / Math.max(1, total)) * 65, '已获取 ' + received + '/' + total + ' 跳');
-            // 边收边画：高德视图与内置引擎都支持增量重绘
-            if (amapView) amapView.setTrace(state.hops, { local: state.local, target: state.target });
-            else renderer.setTrace(state.hops, { local: state.local, target: state.target });
+            // 边收边画：走统一入口，保证与完成时、切视图时的合并规则一致
+            // （fit=false：增量刷新不重算视野，避免画面每来一批跳点就跳一下）
+            drawCurrentTrace({ fit: false });
             renderHopsTable();
           } else if (payload.message) {
             setProgress(15, payload.message);
@@ -1347,23 +1344,45 @@
     });
   }
 
-  /** 把当前追踪数据绘制到"当前生效的底图"上（高德或内置引擎） */
-  function renderTraceToActiveView() {
-    var context = { local: state.local, target: state.target };
+  /**
+   * 统一的重绘入口：把当前追踪数据按"当前视图"绘制。
+   *
+   * 存在的意义：追踪数据的重绘散落在多处（增量推送、完成、切视图、切底图…），
+   * 早期实现每处都自己拼参数，于是出现了"增量重绘漏传 merge，
+   * 逻辑拓扑每次收到跳点又被按地理坐标合并成一条线"的问题。
+   * 现在全部走这一个函数，保证各处行为一致。
+   *
+   * @param {object} [options] { fit: boolean } fit 为 false 时不重算视野/布局（增量刷新用）
+   */
+  function drawCurrentTrace(options) {
+    var opts = options || {};
+    var graph = state.view === 'graph' && !renderer.lanMode;
+
     if (amapView) {
-      amapView.setTrace(state.hops, context);
+      amapView.setTrace(state.hops, { local: state.local, target: state.target });
       return;
     }
-    // 追踪数据必须画在世界地图视图上：若此前停在逻辑拓扑（例如刚扫描过局域网），
-    // 这里要显式切回 map，否则用户会以为"地图没显示"
-    var graph = state.view === 'graph';
-    renderer.setMode(graph ? 'graph' : 'map');
+
     // 逻辑拓扑按"跳"展开，不按地理坐标合并：
-    // 否则"同一城市 6 跳"会被合并成 1 个点，看起来像拓扑没显示出来
-    renderer.setTrace(state.hops, { local: state.local, target: state.target, merge: !graph });
+    // 否则"同一城市 6 跳"会被合并成 1 个点，逻辑拓扑看起来就像只有一条线
+    renderer.setTrace(state.hops, {
+      local: state.local,
+      target: state.target,
+      merge: !graph,
+    });
+
+    if (opts.fit === false) return;
     if (graph) renderer.layoutLogical();
     else renderer.fitToNodes();
     renderer.draw();
+  }
+
+  /** 把当前追踪数据绘制到"当前生效的底图"上（高德或内置引擎） */
+  function renderTraceToActiveView() {
+    // 追踪数据必须画在世界地图/逻辑拓扑上：若此前停在其它查看模式，
+    // 这里要显式切到目标模式，否则用户会以为"地图没显示"
+    if (!amapView) renderer.setMode(state.view === 'graph' ? 'graph' : 'map');
+    drawCurrentTrace();
   }
 
   function finalizeTrace() {
