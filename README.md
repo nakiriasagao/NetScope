@@ -7,7 +7,12 @@
 3. **追踪完整路由**：逐跳 IP、主机名、延迟（最小/平均/最大/抖动）、每跳丢包率；
 4. **地理定位每一跳**：把每个节点落到经纬度（多数据源自动降级 + 本地缓存 + 内置离线库）；
 5. **在世界地图上画出完整网络拓扑图**：本机 → 接入路由器 → 城域网 → 骨干网 → 国际出口 → 目标，弧线颜色表达延迟/丢包，并带数据包流动画；
-6. **查看当前网络的拓扑图**：一键读取本机网卡、默认网关、DNS、ARP 邻居表、监听端口与公网出口，绘制"本机所在网络"的结构图。
+6. **查看当前网络的拓扑图**：一键读取本机网卡、默认网关、DNS、ARP 邻居表、监听端口与公网出口，
+   并**主动扫描整个网段**发现同网段的其他设备（手机 / 电脑 / 打印机 / NAS / 摄像头 / 智能家居等），
+   以网关为中心画成星型拓扑图，标注每台设备的局域网地址、MAC、厂商与设备类型。
+
+**底图可切换**：内置世界地图（全球覆盖，跨洲路由显示完整）或 **高德地图**（国内地理信息更细，
+街道/建筑/中文标注），在工具栏一键切换。
 
 界面还提供：逐跳延迟曲线、连通性报告、端口扫描、DNS 记录与委派链路、证书安全检查、JSON / CSV / GeoJSON / PNG 导出。
 
@@ -67,7 +72,85 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 
 ---
 
-## 二、界面说明
+## 二、地图底图：内置世界地图 / 高德地图
+
+工具栏「底图」下拉框可随时切换，选择会记在浏览器本地，下次打开自动恢复。
+
+| 底图 | 适用场景 | 说明 |
+| --- | --- | --- |
+| **内置世界地图** | 跨洲路由追踪 | 全球 176 个国家/地区，数据本地打包，不依赖任何 CDN 与网络 |
+| **高德地图** | 国内节点、需要街道级细节 | 高德 JS API 2.0，中文标注与建筑物细节齐全；需配置 Key |
+
+### 配置高德 Key（约 3 分钟）
+
+1. 打开 <https://lbs.amap.com/> 注册并完成 **个人开发者实名认证**（控制台 → 账号管理 → 实名认证）；
+2. 进入「应用管理 → 我的应用 → 创建新应用」，名称随意（如 `NetScope`）；
+3. 点该应用的「添加 Key」，**添加两次**：
+   - 服务平台选 **「Web端(JS API)」** —— 用于加载地图底图，**这个是必须的**；
+   - 服务平台选 **「Web服务」** —— 用于服务端 IP 定位 / 逆地理编码，**可选**；
+4. 在 Key 的「设置」里查看 **安全密钥 jscode**（2021-12-02 之后申请的 Key 必须携带）；
+5. 回到 NetScope，点左侧「⚙ 地图设置」，填入 Key 与安全密钥 → 点「测试连接」→「保存并应用」。
+
+**密钥存放位置**：`data/amap-config.json`（已加入 `.gitignore`，不会上传到 GitHub）。
+安全密钥由服务端代理使用，页面源码里看不到它。
+
+### 常见报错对照
+
+| 报错 | 原因与处理 |
+| --- | --- |
+| `INVALID_USER_KEY` | Key 无效或未生效，确认复制完整、服务已开通 |
+| `INVALID_USER_SCODE` | 缺安全密钥：把 jscode 一并填入设置面板 |
+| `USERKEY_PLAT_NOMATCH` | 用「Web端(JS API)」的 Key 调用了 Web 服务接口。**底图不受影响**，只有 IP 定位不可用；如需该功能请再建一个「Web服务」Key |
+| `INVALID_USER_DOMAIN` | 域名白名单限制，把该 Key 的域名白名单设为「不限制」 |
+| `INVALID_USER_IP` | Web 服务 Key 的 IP 白名单限制，把本机公网 IP 加入或清空白名单 |
+| `DAILY_QUERY_OVER_LIMIT` | 当日配额用完，次日恢复 |
+
+未配置 Key 时程序**自动使用内置世界地图**，功能不受影响，只会在状态栏提示"未配置 Key"。
+
+---
+
+## 三、局域网设备发现（当前网络拓扑）
+
+点左侧「扫描局域网设备」，程序会依次做这些事：
+
+1. **读取本机信息**：网卡地址/掩码、默认网关、DNS、接口列表；
+2. **网段存活探测**：对所在网段（如 `192.168.1.0/24`，最多 512 个地址、并发 64）做
+   TCP 连接探测（80/443/445/22/8080/3389 等端口）——很多设备丢弃 ICMP 但会响应 TCP，
+   这一步同时把设备"喂"进系统 ARP 表；
+3. **读取 ARP 邻居表**：拿到 IP ↔ MAC 对应关系（已过滤广播与多播组地址）；
+4. **反向 DNS / 主机名**：把 IP 解析成主机名；
+5. **SSDP（UPnP）发现**：组播 M-SEARCH，可拿到智能电视、路由器、NAS 的设备描述；
+6. **mDNS 查询**：查询 `_services._dns-sd._udp` 等常见服务类型；
+7. **MAC 厂商识别**：内置 OUI 表（919 条常用厂商），识别 Apple / 华为 / 小米 / TP-Link / Realtek 等；
+   若 MAC 是**本地管理地址**（第二位最低有效位为 1，常见于虚拟机、随机化 MAC、Mesh 节点），
+   会明确标注原因而不是笼统写"未知"；
+8. **设备类型推断**：结合厂商、主机名、SSDP 描述推断为
+   电脑 / 手机 / 路由器 / 打印机 / NAS / 摄像头 / 电视 / IoT / 虚拟网卡等。
+
+### 拓扑图怎么读
+
+局域网设备使用**私有地址，在世界地图上没有真实经纬度**，因此本地网络用**星型拓扑**表达连接关系：
+
+```
+              本机 (192.168.1.111)
+                     │
+   设备 ──── 网关/路由器 (192.168.1.1) ──── 设备
+                     │
+                 互联网（公网出口 IP）
+```
+
+- **中心**：网关（黄色），显示其 IP 与主机名；
+- **环绕**：同网段的其它设备，标签显示"局域网地址 + 主机名"，颜色按设备类型区分；
+- **上方**：本机（绿色）；**下方**：互联网（粉色），并显示公网出口 IP；
+- 点击任意节点查看详情：局域网地址、MAC、厂商、SSDP/mDNS 信息、ARP 类型；
+- 右侧「路由跳点」表会切换为设备清单，可直接对照查看。
+
+> 说明：若同时启用了高德底图，扫描局域网时会自动切回内置引擎——高德是地理底图，
+> 无法表达没有经纬度的私有地址设备。
+
+---
+
+## 四、界面说明
 
 | 区域 | 功能 |
 | --- | --- |
@@ -104,7 +187,7 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 
 ---
 
-## 三、工作原理
+## 五、工作原理
 
 ```
 浏览器前端（Canvas + SVG，无任何前端框架）
@@ -152,7 +235,7 @@ Node.js HTTP 服务（零依赖）
 
 ---
 
-## 四、HTTP 接口
+## 六、HTTP 接口
 
 所有接口返回统一结构 `{ ok: true, ... }`，出错返回 `{ ok: false, error: "..." }`。
 
@@ -174,6 +257,12 @@ Node.js HTTP 服务（零依赖）
 | GET | `/api/dns/delegation/stream` | **SSE** 根 → 顶级域 → 权威服务器的委派链路追踪 |
 | POST | `/api/portscan` | 端口扫描，body: `{ target, mode: 'quick'\|'list'\|'range', ports, from, to }` |
 | POST | `/api/security` | TLS 证书链与安全检查 |
+| POST | `/api/lanscan` | **局域网设备扫描**，body: `{ deep, maxHosts, timeoutMs, includeSsdp, includeMdns, hostname }`，返回设备列表 + 星型拓扑结构 |
+| GET | `/api/amap/config` | 高德配置状态（密钥以掩码返回） |
+| POST | `/api/amap/config` | 保存高德 Key 与安全密钥，body: `{ key, security, enabled }` |
+| POST | `/api/amap/test` | 高德连通性检测（可用临时密钥，不落盘） |
+| POST | `/api/amap/ip` | 高德 IP 定位，body: `{ ip }` |
+| POST | `/api/amap/regeo` | 高德逆地理编码，body: `{ lon, lat }` |
 | GET | `/api/tasks` | 任务列表 |
 | POST | `/api/cancel` | 取消任务，body: `{ taskId }` |
 
@@ -189,7 +278,7 @@ curl.exe "http://127.0.0.1:8787/api/trace/stream?target=8.8.8.8&maxHops=20"
 
 ---
 
-## 五、环境变量
+## 七、环境变量
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
@@ -210,7 +299,7 @@ $env:NETSCOPE_GEO_ONLINE='0'; node src/server.js
 
 ---
 
-## 六、安全与合规
+## 八、安全与合规
 
 - 服务**默认只监听 `127.0.0.1`**，不会被局域网其它设备访问。如需局域网访问，请自觉确认所在网络环境可信。
 - **端口扫描属于主动探测行为，请仅对你拥有或已获得明确授权的目标使用。** 扫描公网主机可能违反服务条款或当地法律。
@@ -220,7 +309,7 @@ $env:NETSCOPE_GEO_ONLINE='0'; node src/server.js
 
 ---
 
-## 七、目录结构
+## 九、目录结构
 
 ```
 NetScope/
@@ -239,36 +328,62 @@ NetScope/
 │   │   ├── geo.js             地理定位（多源降级 + 缓存 + 离线库）
 │   │   ├── sysinfo.js         本机网络拓扑发现
 │   │   ├── dns.js             DNS 记录、多解析器对比、委派链路追踪
+│   │   ├── lanscan.js         局域网设备发现（网段探测 + ARP + SSDP/mDNS + 厂商识别）
+│   │   ├── amap.js            高德地图服务端代理（配置管理 + 连通性检测 + IP 定位）
 │   │   └── orchestrator.js    完整诊断流程编排
-│   └── data/offline-geo.js    内置离线地理库（种子数据）
+│   └── data/
+│       ├── offline-geo.js     内置离线地理库（种子数据）
+│       └── oui-vendors.js     MAC 厂商前缀表（919 条常用厂商）
 ├── public/
 │   ├── index.html             界面结构
 │   ├── css/style.css          界面样式
 │   ├── js/{config,api,draw,export,app}.js   前端逻辑
-│   └── data/world-110m.json   预投影世界地图（177 个国家/地区）
+│   ├── js/amap-map.js         高德地图接入层（加载器 + 覆盖物绘制 + 回退）
+│   └── data/world-110m.json   预投影世界地图（176 个国家/地区，等距圆柱投影）
 ├── tools/build-world-map.js   世界地图数据构建脚本
 ├── bin/netscope.js            命令行工具
 ├── test/
-│   ├── unit.test.js           单元测试（100 个用例）
+│   ├── unit.test.js           单元测试（101 个用例）
 │   ├── smoke-api.js           HTTP 接口冒烟测试（12 项）
 │   ├── browser-e2e.js         浏览器端到端测试（CDP + 真实渲染审计）
+│   ├── render-audit.js         地图渲染对抗性审计
+│   ├── layout-e2e.js           投影与统计栏布局验收
+│   ├── lan-topology-e2e.js     局域网拓扑验收
+│   ├── amap-e2e.js             高德底图验收
+│   ├── validate-frontend.js    前端静态校验
 │   └── run-tests.js           汇总入口
 └── data/                      缓存与截图输出（自动生成）
 ```
 
 ---
 
-## 八、测试
+## 十、测试
 
 ```powershell
-node test/run-tests.js            # 单元测试 + 接口冒烟测试（自动跳过未启动的服务）
-node --test test/unit.test.js     # 仅单元测试（100 个用例，约 0.2 秒）
+node test/run-tests.js            # 单元测试 + 接口冒烟（自动跳过未启动的服务）
+node --test test/unit.test.js     # 仅单元测试（101 个用例，约 0.2 秒）
 node test/smoke-api.js            # 仅接口冒烟测试（需服务已启动）
 node test/browser-e2e.js          # 浏览器端到端测试（需 Chrome/Edge 与服务）
 node test/render-audit.js         # 地图渲染对抗性审计（需 Chrome/Edge 与服务）
 node test/layout-e2e.js           # 布局与投影验收：真实探测 + 截图（需 Chrome/Edge 与服务）
+node test/lan-topology-e2e.js     # 局域网拓扑验收：真实扫描 + 截图（需 Chrome/Edge 与服务）
+node test/amap-e2e.js <key> <security>   # 高德底图验收（未配置 Key 时自动跳过）
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
+
+一次性跑全部（含浏览器验收）：
+
+```powershell
+$env:NS_WITH_BROWSER='1'
+$env:NS_AMAP_KEY='你的Key'; $env:NS_AMAP_SECURITY='你的安全密钥'   # 可选，用于高德验收
+node test/run-tests.js
+```
+
+`test/lan-topology-e2e.js` 会真实触发一次局域网扫描，断言星型拓扑正确绘制
+（含网关/本机/互联网/设备节点、设备表与统计栏），并输出 `data/screenshots/lan-topology.png`。
+
+`test/amap-e2e.js` 会真实加载高德底图，断言脚本加载、地图实例创建、瓦片接口返回 200、
+并对地图容器做像素抽样确认内容确实渲染出来，最后输出 `data/screenshots/amap-basemap.png`。
 
 `test/layout-e2e.js` 会真实追踪一次跨洲目标，断言**投影等比例**（经纬方向每度像素比必须为 1）、
 **统计栏与画布左右对齐**、**目标地址不溢出**、**连线不跨越未定位节点**，并输出
@@ -280,7 +395,7 @@ node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合�
 
 ---
 
-## 九、常见问题
+## 十一、常见问题
 
 **Q：为什么某一跳显示"无响应"（`*`）？**
 骨干路由器普遍对 ICMP 限速或直接不响应探测包，这是**正常现象**，不代表链路中断。请结合前后跳的延迟与丢包判断。
@@ -302,6 +417,6 @@ node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合�
 
 ---
 
-## 十、许可
+## 十二、许可
 
 本项目为自用工具，代码可自由修改与分发。地图数据来源为 Natural Earth 1:110m（公有领域），由 `tools/build-world-map.js` 在构建期下载并预投影，运行时不依赖任何外部 CDN。
