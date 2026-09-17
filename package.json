@@ -13,7 +13,11 @@
     "dev": "node src/server.js --port 8787",
     "cli": "node bin/netscope.js",
     "test": "node test/run-tests.js",
-    "build:map": "node tools/build-world-map.js"
+    "build:map": "node tools/build-world-map.js",
+    "build:exe": "node tools/build-exe.js",
+    "build:apk": "node tools/build-apk.js",
+    "build:all": "node tools/build-exe.js && node tools/build-apk.js",
+    "fetch:android": "node tools/fetch-android-tools.js"
   },
   "bin": {
     "netscope": "bin/netscope.js"
