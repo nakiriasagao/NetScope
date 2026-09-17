@@ -8,6 +8,7 @@
   var api = window.NetScopeAPI;
   var D = window.NetScopeDraw;
   var Exporter = window.NetScopeExport;
+  var Amap = window.NetScopeAmap;
 
   /* ------------------------------ 全局状态 ------------------------------ */
 
@@ -23,16 +24,31 @@
     security: null,
     portScan: null,
     local: null,
+    lan: null,
     engine: null,
     fallbackNotes: [],
     selectedNode: null,
     stream: null,
     busy: false,
     view: 'map',
+    baseMap: 'builtin',
   };
 
   var renderer = null;
+  var amapView = null;
   var el = {};
+
+  /** 当前生效的渲染目标：高德视图或内置渲染器 */
+  function activeView() {
+    return amapView || renderer;
+  }
+
+  /** 在两种底图上执行同一个绘制动作 */
+  function withView(fn) {
+    if (!fn) return;
+    if (amapView) fn(amapView, true);
+    else fn(renderer, false);
+  }
 
   /* ------------------------------ 工具函数 ------------------------------ */
 
@@ -169,6 +185,20 @@
       progressInner: $('progress-inner'),
       progressText: $('progress-text'),
       btnLocal: $('btn-local'),
+      btnLanScan: $('btn-lanscan'),
+      btnSettings: $('btn-settings'),
+      optDeepScan: $('opt-deepscan'),
+      optBaseMap: $('opt-basemap'),
+      baseMapStatus: $('basemap-status'),
+      settingsModal: $('settings-modal'),
+      settingsClose: $('settings-close'),
+      amapKey: $('amap-key'),
+      amapSecurity: $('amap-security'),
+      amapEnabled: $('amap-enabled'),
+      amapSave: $('amap-save'),
+      amapTest: $('amap-test'),
+      amapClear: $('amap-clear'),
+      amapTestResult: $('amap-test-result'),
       btnEgress: $('btn-egress'),
       btnScan: $('btn-scan'),
       optListenPorts: $('opt-listenports'),
@@ -196,14 +226,18 @@
     bindEvents();
     setBusy(false);
     syncRangeLabels();
+    initBaseMap();
 
     await loadWorld();
     await checkHealth();
     maybeAutoRun();
 
     window.addEventListener('resize', function () {
-      renderer.resize();
-      renderer.draw();
+      if (amapView) amapView.resize();
+      else {
+        renderer.resize();
+        renderer.draw();
+      }
       if (state.hops.length) D.drawLatencyChart(el.latencyChart, state.hops);
     });
   }
@@ -238,6 +272,7 @@
     }
   }
 
+  /** 同步一个数值区间的显示标签 */
   function syncRangeLabels() {
     var pairs = [
       [el.optMaxHops, $('val-maxhops')],
@@ -253,7 +288,473 @@
     });
   }
 
-  /* ------------------------------ 事件绑定 ------------------------------ */
+  /* ------------------------------ 底图管理 ------------------------------ */
+
+  var BASE_MAP_KEY = 'netscope.basemap';
+
+  /** 启动时恢复上次选择的底图 */
+  function initBaseMap() {
+    var saved = 'builtin';
+    try {
+      saved = window.localStorage.getItem(BASE_MAP_KEY) || 'builtin';
+    } catch (e) {
+      /* ignore */
+    }
+    if (el.optBaseMap) el.optBaseMap.value = saved;
+    state.baseMap = saved;
+    updateBaseMapStatus();
+    if (saved === 'amap') {
+      // 页面加载后异步切换，避免阻塞首屏
+      setTimeout(function () {
+        switchBaseMap('amap');
+      }, 300);
+    }
+  }
+
+  function updateBaseMapStatus(extra) {
+    if (!el.baseMapStatus) return;
+    if (state.baseMap === 'builtin') {
+      el.baseMapStatus.textContent = '内置（全球）';
+      el.baseMapStatus.className = 'basemap-status';
+      return;
+    }
+    el.baseMapStatus.textContent = extra || (amapView ? '高德已启用' : '高德未就绪');
+    el.baseMapStatus.className = 'basemap-status ' + (amapView ? 'is-ok' : 'is-warn');
+  }
+
+  /**
+   * 切换底图
+   * @param {'builtin'|'amap'} mode
+   * @param {{ silent?: boolean }} [options]
+   */
+  function switchBaseMap(mode, options) {
+    var opts = options || {};
+    if (mode === state.baseMap && ((mode === 'amap' && amapView) || (mode === 'builtin' && !amapView))) {
+      return Promise.resolve();
+    }
+
+    if (mode === 'builtin') {
+      if (amapView) {
+        amapView.destroy();
+        amapView = null;
+      }
+      el.canvas.hidden = false;
+      el.overlay.hidden = false;
+      state.baseMap = 'builtin';
+      try {
+        window.localStorage.setItem(BASE_MAP_KEY, 'builtin');
+      } catch (e) {
+        /* ignore */
+      }
+      renderer.resize();
+      if (state.lan && renderer.lanMode) renderer.setLanTopology(state.lan.topology);
+      else if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+      else renderer.fitToContainer();
+      updateBaseMapStatus();
+      return Promise.resolve();
+    }
+
+    // 切到高德
+    var credentials = Amap ? Amap.credentials() : { key: '' };
+    if (!credentials.key) {
+      updateBaseMapStatus('未配置 Key');
+      if (el.optBaseMap) el.optBaseMap.value = 'builtin';
+      if (!opts.silent) {
+        toast('尚未配置高德 Key：点击左侧「⚙ 地图设置」填写后即可启用高德底图', 'warn', 9000);
+        openSettings();
+      }
+      return Promise.resolve();
+    }
+
+    return api
+      .amapConfig()
+      .catch(function () {
+        return null;
+      })
+      .then(function () {
+        return Amap.loadAmap({ plugins: [] });
+      })
+      .then(function () {
+        if (amapView) return amapView;
+        el.canvas.hidden = true;
+        el.overlay.hidden = false;
+        var view = Amap.createAmapView(el.canvasWrap, el.overlay, {
+          onReady: function () {
+            updateBaseMapStatus('高德已启用');
+          },
+        });
+        return view.init({ zoom: 3, center: [110, 32], mapStyle: 'amap://styles/darkblue' }).then(function () {
+          amapView = view;
+          state.baseMap = 'amap';
+          try {
+            window.localStorage.setItem(BASE_MAP_KEY, 'amap');
+          } catch (e) {
+            /* ignore */
+          }
+          updateBaseMapStatus('高德已启用');
+          // 把当前数据重绘到高德底图上
+          if (state.lan && state.lan.topology) view.setLanTopology(state.lan.topology);
+          else if (state.hops.length) view.setTrace(state.hops, { local: state.local, target: state.target });
+          if (!opts.silent) toast('已切换到高德地图底图', 'ok');
+          return view;
+        });
+      })
+      .catch(function (error) {
+        // 回退到内置地图，并说明原因
+        if (amapView) {
+          amapView.destroy();
+          amapView = null;
+        }
+        el.canvas.hidden = false;
+        el.overlay.hidden = false;
+        state.baseMap = 'builtin';
+        if (el.optBaseMap) el.optBaseMap.value = 'builtin';
+        try {
+          window.localStorage.setItem(BASE_MAP_KEY, 'builtin');
+        } catch (e) {
+          /* ignore */
+        }
+        renderer.resize();
+        if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+        updateBaseMapStatus('加载失败，已回退');
+        if (!opts.silent) {
+          toast('高德地图加载失败：' + escapeHtml(error.message) + '<br/>已回退到内置世界地图', 'error', 12000);
+        }
+      });
+  }
+
+  /* ------------------------------ 设置面板 ------------------------------ */
+
+  function openSettings() {
+    if (!el.settingsModal) return;
+    var cred = Amap ? Amap.loadLocalCredentials() : { key: '', security: '', enabled: true };
+    if (el.amapKey) el.amapKey.value = cred.key || '';
+    if (el.amapSecurity) el.amapSecurity.value = cred.security || '';
+    if (el.amapEnabled) el.amapEnabled.checked = cred.enabled !== false;
+    if (el.amapTestResult) el.amapTestResult.innerHTML = '';
+    el.settingsModal.hidden = false;
+  }
+
+  function closeSettings() {
+    if (el.settingsModal) el.settingsModal.hidden = true;
+  }
+
+  function readSettingsForm() {
+    return {
+      key: el.amapKey ? el.amapKey.value.trim() : '',
+      security: el.amapSecurity ? el.amapSecurity.value.trim() : '',
+      enabled: el.amapEnabled ? el.amapEnabled.checked : true,
+    };
+  }
+
+  function renderAmapTestResult(result) {
+    if (!el.amapTestResult) return;
+    var html = '';
+    if (result.checks && result.checks.length) {
+      result.checks.forEach(function (check) {
+        html +=
+          '<div class="check"><span class="mark" style="color:' + (check.ok ? 'var(--ok)' : 'var(--bad)') + '">' +
+          (check.ok ? '✔' : '✘') + '</span><span>' + escapeHtml(check.name) + '：' + escapeHtml(check.detail) + '</span></div>';
+      });
+    }
+    if (result.error) html += '<div class="check"><span class="mark" style="color:var(--bad)">✘</span><span>' + escapeHtml(result.error) + '</span></div>';
+    if (result.message) {
+      html += '<div style="margin-top:6px;color:' + (result.ok ? 'var(--ok)' : 'var(--warn)') + '">' + escapeHtml(result.message) + '</div>';
+    }
+    if (result.hints && result.hints.length) {
+      html += '<div class="hint-block"><b>常见原因与处理：</b><ul class="hint-list" style="margin:6px 0 0">';
+      result.hints.forEach(function (hint) {
+        html += '<li>' + escapeHtml(hint) + '</li>';
+      });
+      html += '</ul></div>';
+    }
+    el.amapTestResult.innerHTML = html;
+  }
+
+  async function runAmapTest() {
+    var form = readSettingsForm();
+    if (el.amapTestResult) el.amapTestResult.innerHTML = '<div style="color:var(--text-mute)">正在检测…</div>';
+    try {
+      // 用表单里的临时值测试，不落盘
+      var result = await api.request('/api/amap/test', {
+        method: 'POST',
+        body: { key: form.key, security: form.security },
+      });
+      renderAmapTestResult(result);
+      return result;
+    } catch (error) {
+      renderAmapTestResult({ ok: false, error: error.message, hints: [] });
+      return { ok: false };
+    }
+  }
+
+  async function saveAmapSettings() {
+    var form = readSettingsForm();
+    if (form.key && !/^[0-9a-fA-F]{32}$/.test(form.key)) {
+      toast('Key 格式不正确：应为 32 位十六进制字符', 'error', 9000);
+      return;
+    }
+    if (form.security && !/^[0-9a-fA-F]{32}$/.test(form.security)) {
+      toast('安全密钥格式不正确：应为 32 位十六进制字符', 'error', 9000);
+      return;
+    }
+    try {
+      await api.request('/api/amap/config', { method: 'POST', body: form });
+      if (Amap) {
+        Amap.saveLocalCredentials(form);
+        // 密钥变化后需要重新加载脚本
+        amapView = null;
+        window.__netscopeAmapReloaded = true;
+      }
+      try {
+        window.localStorage.removeItem('netscope.amap.loaded');
+      } catch (e) {
+        /* ignore */
+      }
+      toast('已保存高德地图配置', 'ok');
+      closeSettings();
+      if (form.enabled && form.key) {
+        switchBaseMap('amap', { silent: false });
+      } else {
+        switchBaseMap('builtin');
+      }
+    } catch (error) {
+      toast('保存失败：' + escapeHtml(error.message), 'error');
+    }
+  }
+
+  /* --------------------- 局域网扫描与本地拓扑 ------------------------ */
+
+  /**
+   * 扫描局域网设备，并把结果画成星型拓扑图
+   * 数据来自 /api/lanscan：ARP 邻居表 + 网段存活探测 + 主机名反解 +
+   * MAC 厂商识别 + SSDP/mDNS 设备发现
+   */
+  async function runLanScan() {
+    if (state.busy) {
+      toast('已有任务正在执行，请稍候', 'warn');
+      return;
+    }
+    var deep = el.optDeepScan ? el.optDeepScan.checked : true;
+    setBusy(true, deep ? '正在扫描局域网（主动探测整个网段）…' : '正在读取邻居表…');
+    setProgress(8, '读取网卡与网关…');
+    switchTab('local');
+
+    var ticker = setInterval(function () {
+      var pct = Number(String(el.progressInner.style.width || '8%').replace('%', '')) || 8;
+      setProgress(Math.min(92, pct + 4), '正在探测网段内的主机…');
+    }, 1200);
+
+    try {
+      var result = await api.lanScan({
+        deep: deep,
+        includeSsdp: true,
+        includeMdns: true,
+        maxHosts: 512,
+        timeoutMs: 800,
+        // 传给后端，用于把"本机地址"标注出来（例如同一台机器有多个地址时）
+        hostname: (state.local && state.local.hostname) || null,
+      });
+      clearInterval(ticker);
+      setProgress(100, '完成');
+
+      renderLocalPanel(buildLocalPanelInput(result));
+      renderLanTopologyView(result);
+
+      var summary = '局域网扫描完成：发现 ' + result.lan.devices.length + ' 台设备';
+      if (result.lan.scanned && result.lan.scanned.hosts) summary += '（探测 ' + result.lan.scanned.hosts + ' 个地址）';
+      if (result.egress && result.egress.ip) {
+        summary += '<br/>公网出口：' + escapeHtml(result.egress.ip) +
+          (result.egress.location && result.egress.location.city ? '（' + escapeHtml(result.egress.location.city) + '）' : '');
+      }
+      toast(summary, 'ok', 9000);
+    } catch (error) {
+      clearInterval(ticker);
+      toast('局域网扫描失败：' + escapeHtml(error.message), 'error', 9000);
+    } finally {
+      clearInterval(ticker);
+      setBusy(false);
+    }
+  }
+
+  /** 把扫描结果画成星型拓扑（局域网设备没有经纬度，始终用内置引擎） */
+  function renderLanTopologyView(result) {
+    var topology = result.topology || { nodes: [], links: [] };
+    if (result.egress && result.egress.location) {
+      topology.anchor = result.egress.location;
+      topology.egressIp = result.egress.ip;
+    }
+    state.lan = Object.assign({}, result, { topology: topology });
+
+    if (amapView) {
+      toast('局域网设备使用私有地址、没有地理坐标，已切回内置引擎以星型拓扑展示', 'warn', 9000);
+      switchBaseMap('builtin');
+    }
+
+    document.querySelectorAll('[data-view]').forEach(function (button) {
+      button.classList.toggle('is-active', button.getAttribute('data-view') === 'graph');
+    });
+    state.view = 'graph';
+    el.mapHint.hidden = true;
+    el.mapStats.hidden = false;
+    renderer.setLanTopology(topology);
+    renderLanStats();
+    renderHopsTableFromLan(topology);
+  }
+
+  /** 局域网模式下的统计栏（左侧网段，右侧设备与出口信息） */
+  function renderLanStats() {
+    var lan = state.lan || {};
+    var topology = lan.topology || {};
+    var devices = (topology.nodes || []).filter(function (n) { return n.role === 'device'; });
+    var identified = devices.filter(function (d) { return d.vendor || d.hostname; }).length;
+
+    el.statTarget.textContent = lan.lan && lan.lan.subnet ? lan.lan.subnet : '本机网络';
+    el.statTarget.title = '当前局域网网段' + (lan.lan && lan.lan.gateway ? '，网关 ' + lan.lan.gateway : '');
+    el.statHops.textContent = String(devices.length);
+    if (el.statLocated) el.statLocated.textContent = String(identified);
+    if (el.statUnlocated) {
+      var unknown = devices.length - identified;
+      el.statUnlocated.textContent = String(unknown);
+      el.statUnlocated.style.color = unknown > 0 ? 'var(--warn)' : '';
+      el.statUnlocated.title = '未识别出厂商与主机名的设备数量';
+    }
+    el.statRtt.textContent = lan.egress && lan.egress.ip ? lan.egress.ip : '—';
+    el.statCountries.textContent = lan.lan && lan.lan.gateway ? lan.lan.gateway : '—';
+    el.statDistance.textContent = lan.lan && lan.lan.scanned && lan.lan.scanned.durationMs
+      ? (lan.lan.scanned.durationMs / 1000).toFixed(1) + ' s'
+      : '—';
+  }
+
+  /** 局域网模式下用设备表替换跳点表 */
+  function renderHopsTableFromLan(topology) {
+    var tbody = el.hopsTable.querySelector('tbody');
+    var nodes = (topology.nodes || []).filter(function (n) { return n.role !== 'internet'; });
+    el.hopsCount.textContent = String(nodes.length);
+    if (!nodes.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="5">未发现设备</td></tr>';
+      return;
+    }
+    var html = '';
+    nodes.forEach(function (node, index) {
+      var roleTag = node.role === 'gateway'
+        ? '<span class="tag tag-ok">网关</span>'
+        : node.role === 'self' ? '<span class="tag">本机</span>' : '';
+      var vendorText = node.vendor
+        ? node.vendor
+        : (node.vendorLocal ? '本地管理地址（虚拟机/随机 MAC）' : '厂商未识别');
+      html +=
+        '<tr data-lan-index="' + index + '">' +
+        '<td class="ttl-cell">' + (node.role === 'gateway' ? 'GW' : node.role === 'self' ? 'ME' : String(index)) + '</td>' +
+        '<td class="mono">' + escapeHtml(node.ip || '—') +
+        (node.mac ? '<div style="color:var(--text-mute);font-size:11px">' + escapeHtml(node.mac) + '</div>' : '') + '</td>' +
+        '<td class="loc-cell">' + escapeHtml(node.typeLabel || '设备') + ' ' + roleTag + '</td>' +
+        '<td colspan="2" style="color:var(--text-dim)">' + escapeHtml(node.hostname || '') +
+        '<div style="color:var(--text-mute);font-size:11px">' + escapeHtml(vendorText) + '</div>' +
+        '</td>' +
+        '</tr>';
+    });
+    tbody.innerHTML = html;
+
+    var rendered = renderer.nodes.filter(function (n) { return n.kind !== 'internet'; });
+    tbody.querySelectorAll('tr[data-lan-index]').forEach(function (row) {
+      row.addEventListener('click', function () {
+        var node = rendered[Number(row.getAttribute('data-lan-index'))];
+        if (!node) return;
+        renderer.setSelected(node);
+        showNodeCard(node);
+      });
+    });
+  }
+
+  /** 仅读取本机信息（不主动扫描网段） */
+  async function runLocalDiscoveryOnly() {
+    switchTab('local');
+    setBusy(true, '正在读取本机网络信息…');
+    setProgress(30, '读取网卡、网关、ARP 邻居表…');
+    try {
+      var info = await api.local({
+        includePorts: el.optListenPorts.checked ? 1 : 0,
+        includeNeighbors: 1,
+        includePublicIP: 1,
+      });
+      state.local = info;
+      renderLocalPanel(info);
+      setProgress(100, '完成');
+      toast('已获取本机网络信息：' + info.interfaces.length + ' 个地址、' + info.neighbors.length + ' 个邻居', 'ok');
+    } catch (error) {
+      toast('读取本机网络失败：' + escapeHtml(error.message), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 局域网设备详情卡片 */
+  /**
+   * 把局域网扫描结果整理成「本机网络」面板需要的结构
+   * （设备列表用扫描结果，接口/网关/DNS 等沿用原字段，缺失时给空数组）
+   */
+  function buildLocalPanelInput(result) {
+    var lan = result.lan || {};
+    var egress = result.egress || {};
+    var neighbors = (lan.devices || []).map(function (device) {
+      return {
+        ip: device.ip,
+        mac: device.mac,
+        type: device.arpType || 'dynamic',
+        vendor: device.vendor,
+        hostname: device.hostname,
+        typeLabel: device.typeLabel,
+      };
+    });
+    return {
+      hostname: result.hostname || (lan.self && lan.self.length ? lan.self[0].name : '') || '本机',
+      platform: result.platform || '',
+      arch: result.arch || '',
+      subnet: lan.subnet || null,
+      interfaces: lan.interfaces || [],
+      gateways: lan.gateway ? [lan.gateway] : [],
+      dnsServers: result.dnsServers || [],
+      neighbors: neighbors,
+      listeners: result.listeners || [],
+      publicIP: { ip: egress.ip || null, provider: egress.provider || null },
+      geo: egress.location ? { [egress.ip]: egress.location } : {},
+      localLocation: egress.location
+        ? { city: egress.location.city, country: egress.location.country, source: egress.provider }
+        : null,
+      scanInfo: {
+        hosts: lan.scanned ? lan.scanned.hosts : 0,
+        alive: lan.scanned ? lan.scanned.alive : 0,
+        durationMs: lan.scanned ? lan.scanned.durationMs : 0,
+        ssdp: (lan.ssdp || []).length,
+        mdns: (lan.mdns || []).length,
+      },
+    };
+  }
+
+  function showLanNodeCard(node) {
+    var html = '';
+    html += '<h3>' + escapeHtml(node.label || node.hostname || node.ip || '设备') + '</h3>';
+    html += '<div class="subtitle">' + escapeHtml(node.typeLabel || '局域网设备') + '</div>';
+    html += '<dl class="kv">';
+    if (node.ip) html += '<dt>局域网地址</dt><dd class="mono">' + escapeHtml(node.ip) + '</dd>';
+    if (node.mac) html += '<dt>MAC</dt><dd class="mono">' + escapeHtml(node.mac) + '</dd>';
+    if (node.vendor) html += '<dt>厂商</dt><dd>' + escapeHtml(node.vendor) + '</dd>';
+    if (node.iface) html += '<dt>接口</dt><dd>' + escapeHtml(node.iface) + '</dd>';
+    if (node.ssdp) {
+      html += '<dt>SSDP</dt><dd class="mono">' + escapeHtml(node.ssdp.server || node.ssdp.st || '已响应') + '</dd>';
+      if (node.ssdp.location) html += '<dt>描述地址</dt><dd class="mono" style="font-size:11.5px">' + escapeHtml(node.ssdp.location) + '</dd>';
+    }
+    if (node.mdns && node.mdns.names && node.mdns.names.length) {
+      html += '<dt>mDNS</dt><dd class="mono" style="font-size:11.5px">' + node.mdns.names.slice(0, 3).map(escapeHtml).join('<br/>') + '</dd>';
+    }
+    if (node.arpType) html += '<dt>ARP</dt><dd>' + escapeHtml(node.arpType === 'dynamic' ? '动态' : '静态') + '</dd>';
+    html += '</dl>';
+    html += '<div style="color:var(--text-mute);font-size:12px;line-height:1.6">' +
+      '局域网设备使用私有地址，在世界地图上没有真实经纬度，因此用星型拓扑表达它与网关的连接关系。</div>';
+    el.nodeCardBody.innerHTML = html;
+    el.nodeCard.hidden = false;
+  }
 
   function bindEvents() {
     el.targetForm.addEventListener('submit', function (event) {
@@ -307,7 +808,34 @@
       showExportMenu();
     });
 
-    el.btnLocal.addEventListener('click', runLocalDiscovery);
+    el.btnLocal.addEventListener('click', runLocalDiscoveryOnly);
+    if (el.btnLanScan) el.btnLanScan.addEventListener('click', runLanScan);
+
+    // 底图切换
+    if (el.optBaseMap) {
+      el.optBaseMap.addEventListener('change', function () {
+        switchBaseMap(el.optBaseMap.value);
+      });
+    }
+
+    // 高德设置面板
+    if (el.btnSettings) el.btnSettings.addEventListener('click', openSettings);
+    if (el.settingsClose) el.settingsClose.addEventListener('click', closeSettings);
+    if (el.settingsModal) {
+      el.settingsModal.addEventListener('click', function (event) {
+        if (event.target === el.settingsModal) closeSettings();
+      });
+    }
+    if (el.amapSave) el.amapSave.addEventListener('click', saveAmapSettings);
+    if (el.amapTest) el.amapTest.addEventListener('click', runAmapTest);
+    if (el.amapClear) {
+      el.amapClear.addEventListener('click', function () {
+        if (el.amapKey) el.amapKey.value = '';
+        if (el.amapSecurity) el.amapSecurity.value = '';
+        if (el.amapTestResult) el.amapTestResult.innerHTML = '';
+        toast('已清空输入框内容，点「保存并应用」后生效', 'warn');
+      });
+    }
     el.btnEgress.addEventListener('click', runEgress);
     el.btnScan.addEventListener('click', runPortScan);
 
@@ -366,17 +894,49 @@
           other.classList.toggle('is-active', other === button);
         });
         state.view = view;
+        // 高德底图只提供地理视图；切到"逻辑拓扑"时临时切回内置引擎
+        if (amapView) {
+          toast('逻辑拓扑视图由内置引擎绘制（高德底图仅提供地理视图），已自动切换', 'warn', 8000);
+          switchBaseMap('builtin').then(function () {
+            renderer.setMode(view);
+            if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+          });
+          return;
+        }
+        if (state.lan && renderer.lanMode && state.lan.topology) {
+          renderer.setLanTopology(state.lan.topology);
+          return;
+        }
         renderer.setMode(view);
+        if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
       });
     });
 
     $('btn-zoom-in').addEventListener('click', function () {
+      if (amapView && amapView.getMap()) {
+        amapView.getMap().zoomIn();
+        return;
+      }
       renderer.zoomAt(renderer.width / 2, renderer.height / 2, 1.25);
     });
     $('btn-zoom-out').addEventListener('click', function () {
+      if (amapView && amapView.getMap()) {
+        amapView.getMap().zoomOut();
+        return;
+      }
       renderer.zoomAt(renderer.width / 2, renderer.height / 2, 0.8);
     });
     $('btn-reset-view').addEventListener('click', function () {
+      if (amapView) {
+        // 高德视图：把当前覆盖物重新纳入视野
+        if (state.lan && state.lan.topology) amapView.setLanTopology(state.lan.topology);
+        else if (state.hops.length) amapView.setTrace(state.hops, { local: state.local, target: state.target });
+        return;
+      }
+      if (state.lan && renderer.lanMode && state.lan.topology) {
+        renderer.setLanTopology(state.lan.topology);
+        return;
+      }
       if (state.hops.length) renderer.fitToNodes();
       else renderer.fitToContainer();
     });
@@ -389,6 +949,10 @@
 
     document.addEventListener('keydown', function (event) {
       if (event.key === 'Escape') {
+        if (el.settingsModal && !el.settingsModal.hidden) {
+          closeSettings();
+          return;
+        }
         if (state.stream) {
           state.stream.close();
           state.stream = null;
@@ -507,6 +1071,9 @@
       state.stream = null;
     }
     state.input = input;
+    // 目标先以对象形式占位：后续 done 事件会补上 primaryIP 等字段，
+    // 若留成字符串，赋值属性时会抛 TypeError
+    state.target = { host: input };
     state.hops = [];
     state.geo = {};
     state.summary = null;
@@ -517,7 +1084,9 @@
     state.portScan = null;
     state.engine = null;
     state.fallbackNotes = [];
-    renderer.setTrace([], {});
+    renderer.lanMode = false;
+    if (amapView) amapView.setTrace([], {});
+    else renderer.setTrace([], {});
     renderer.setSelected(null);
     el.nodeCard.hidden = true;
     el.mapHint.hidden = true;
@@ -555,7 +1124,9 @@
             received = payload.to || state.hops.length;
             total = payload.total || received;
             setProgress(20 + (received / Math.max(1, total)) * 65, '已获取 ' + received + '/' + total + ' 跳');
-            renderer.setTrace(state.hops, { local: state.local, target: state.target });
+            // 边收边画：高德视图与内置引擎都支持增量重绘
+            if (amapView) amapView.setTrace(state.hops, { local: state.local, target: state.target });
+            else renderer.setTrace(state.hops, { local: state.local, target: state.target });
             renderHopsTable();
           } else if (payload.message) {
             setProgress(15, payload.message);
@@ -571,10 +1142,15 @@
           state.engine = payload.engine || (result.trace && result.trace.engine) || null;
           state.fallbackNotes = payload.fallbackNotes || (result.trace && result.trace.fallbackNotes) || [];
           state.summary = payload.summary || (result.trace && result.trace.summary) || null;
-          state.target = result.target || state.target;
-          if (state.target === null && result.targetIP) {
-            state.target = { host: input, primaryIP: result.targetIP };
-          } else if (state.target && result.targetIP && !state.target.primaryIP) {
+          // state.target 必须是对象：runTrace 时它只被设为目标字符串，
+          // 这里统一归一化，避免对字符串赋属性（会抛 TypeError）
+          var resolvedTarget = result.target && typeof result.target === 'object' ? result.target : null;
+          if (resolvedTarget) {
+            state.target = resolvedTarget;
+          } else if (typeof state.target === 'string' || state.target === null || state.target === undefined) {
+            state.target = { host: typeof state.target === 'string' ? state.target : input };
+          }
+          if (state.target && result.targetIP && !state.target.primaryIP) {
             state.target.primaryIP = result.targetIP;
           }
           finalizeTrace();
@@ -637,7 +1213,12 @@
           setBusy(false);
           setProgress(100, '完成');
           var result = payload.result || {};
-          state.target = result.target || state.target;
+          // 归一化 target 为对象，避免后续对字符串赋属性
+          if (result.target && typeof result.target === 'object') {
+            state.target = result.target;
+          } else if (typeof state.target === 'string' || !state.target) {
+            state.target = { host: typeof state.target === 'string' ? state.target : input };
+          }
           state.probe = result.probe || null;
           state.trace = result.trace || null;
           state.summary = (result.trace && result.trace.summary) || null;
@@ -666,14 +1247,24 @@
     });
   }
 
+  /** 把当前追踪数据绘制到"当前生效的底图"上（高德或内置引擎） */
+  function renderTraceToActiveView() {
+    var context = { local: state.local, target: state.target };
+    if (amapView) {
+      amapView.setTrace(state.hops, context);
+      return;
+    }
+    renderer.setTrace(state.hops, context);
+    if (state.view === 'graph') renderer.setMode('graph');
+    else renderer.fitToNodes();
+  }
+
   function finalizeTrace() {
     if (!state.hops.length) {
       toast('未获取到任何跳点。目标可能屏蔽了探测，或本机网络限制了 ICMP。', 'warn', 9000);
       return;
     }
-    renderer.setTrace(state.hops, { local: state.local, target: state.target });
-    if (state.view === 'graph') renderer.setMode('graph');
-    else renderer.fitToNodes();
+    renderTraceToActiveView();
     renderHopsTable();
     D.drawLatencyChart(el.latencyChart, state.hops);
     updateStats();
@@ -791,6 +1382,8 @@
 
   /** 定位并高亮某一跳对应的地图节点（未定位的跳点在地图上不存在，改为弹出说明卡片） */
   function focusHop(hop) {
+    // 局域网模式下点击设备表走另一条路径
+    if (renderer.lanMode) return;
     var node = renderer.nodes.find(function (candidate) {
       return (candidate.hops || []).some(function (h) {
         return h === hop || (h.ip && hop.ip && h.ip === hop.ip && h.ttl === hop.ttl);
@@ -801,6 +1394,15 @@
         return u.hop === hop || (u.ip && hop.ip && u.ip === hop.ip && u.ttl === hop.ttl);
       });
       showUnlocatedCard(entry || { ttl: hop.ttl, ip: hop.ip, reason: '该跳未参与地图连线（缺少地理位置）', hop: hop });
+      return;
+    }
+    if (amapView) {
+      // 高德视图：把地图中心移到该节点
+      var map = amapView.getMap();
+      if (map && typeof node.lon === 'number' && typeof node.lat === 'number') {
+        map.setZoomAndCenter(Math.max(map.getZoom(), 6), [node.lon, node.lat]);
+      }
+      showNodeCard(node);
       return;
     }
     if (state.view === 'map' && typeof node.x === 'number') {
