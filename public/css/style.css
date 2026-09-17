@@ -942,10 +942,11 @@ select {
   align-items: center;
   gap: 16px;
   padding: 9px 14px;
-  background: rgba(11, 18, 32, 0.9);
+  /* 统计栏叠在持续重绘的地图画布之上，这里刻意不用 backdrop-filter：
+     毛玻璃会让浏览器每帧重算背景模糊，是动画卡顿的常见原因 */
+  background: rgba(11, 18, 32, 0.94);
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  backdrop-filter: blur(6px);
   box-sizing: border-box;
   min-width: 0;
 }
