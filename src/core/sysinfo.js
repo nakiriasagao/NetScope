@@ -118,6 +118,12 @@ function parseIpconfig(text) {
 
 /**
  * 解析 arp -a 输出
+ *
+ * 过滤规则：
+ *   - 广播地址（x.x.x.255、255.255.255.255）不是设备
+ *   - 0.0.0.0 是无效条目
+ *   - 多播地址（224.0.0.0/4，含 239.255.255.250 这类 SSDP/mDNS 组播组）
+ *     是"组播组标识"而不是真实设备，若混进设备列表会画出不存在的节点
  */
 function parseArp(text) {
   const neighbors = [];
@@ -126,6 +132,7 @@ function parseArp(text) {
     if (!m) continue;
     const ip = m[1];
     if (ip.endsWith('.255') || ip === '255.255.255.255' || ip === '0.0.0.0') continue;
+    if (isMulticastIPv4(ip)) continue;
     neighbors.push({
       ip,
       mac: m[2].replace(/-/g, ':').toUpperCase(),
@@ -133,6 +140,12 @@ function parseArp(text) {
     });
   }
   return neighbors;
+}
+
+/** 是否为 IPv4 多播地址（224.0.0.0/4） */
+function isMulticastIPv4(ip) {
+  const first = Number.parseInt(String(ip).split('.')[0], 10);
+  return Number.isInteger(first) && first >= 224 && first <= 239;
 }
 
 /**
