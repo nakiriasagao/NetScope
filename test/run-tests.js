@@ -39,6 +39,7 @@ const LAN_TRACE_FILE = path.join(__dirname, 'lan-then-trace-e2e.js');
 const VIEW_SWITCH_FILE = path.join(__dirname, 'view-switch-basemap-e2e.js');
 const TOPO_PERF_FILE = path.join(__dirname, 'topology-perf-e2e.js');
 const GRAPH_TRACE_FILE = path.join(__dirname, 'graph-trace-e2e.js');
+const AMAP_GRAPH_FILE = path.join(__dirname, 'amap-graph-e2e.js');
 
 const BASE = process.env.NS_BASE || 'http://127.0.0.1:8787';
 const SKIP_SMOKE = /^(1|true|yes|on)$/i.test(process.env.NS_SKIP_SMOKE || '');
@@ -153,7 +154,7 @@ function describeOutcome(item) {
 }
 
 (async () => {
-  const total = WITH_BROWSER ? 11 : 2;
+  const total = WITH_BROWSER ? 12 : 2;
   say('==================== NetScope 测试汇总 ====================');
   say(`Node: ${process.version}    项目: ${ROOT}`);
   say(`模式: ${WITH_BROWSER ? '含浏览器验收（局域网拓扑 + 高德底图）' : '仅单元测试 + 接口冒烟（NS_WITH_BROWSER=1 可开启浏览器验收）'}`);
@@ -244,6 +245,12 @@ function describeOutcome(item) {
         index: 11,
         file: GRAPH_TRACE_FILE,
         name: '探测外网的逻辑拓扑 (test/graph-trace-e2e.js)',
+        args: [BASE],
+      },
+      {
+        index: 12,
+        file: AMAP_GRAPH_FILE,
+        name: '高德底图的逻辑拓扑 (test/amap-graph-e2e.js)',
         args: [BASE],
       },
     ];
