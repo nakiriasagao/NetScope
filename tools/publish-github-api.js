@@ -236,11 +236,23 @@ function detectBinary(buffer) {
 
     if (sha) {
       // 内容未变则不必提交
+      // 注意：GitHub Contents API 返回的 content 是**按行折行**的 base64，
+      // 且换行符可能被规范化，因此这里同时比较"去除空白后的 base64"与"原始字节"两种口径，
+      // 只在确实不同时才提交，避免把未变化的文件重复提交（或反过来漏提交）。
       try {
         const current = await api('GET', `/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(rel)}?ref=${BRANCH}`);
         if (current && current.content) {
-          const remote = Buffer.from(String(current.content).replace(/\s/g, ''), 'base64');
-          if (remote.equals(buffer)) {
+          const remoteRaw = String(current.content).replace(/\s/g, '');
+          const localRaw = buffer.toString('base64');
+          if (remoteRaw === localRaw) {
+            skipped += 1;
+            continue;
+          }
+          const remote = Buffer.from(remoteRaw, 'base64');
+          // 文本文件比较时忽略行尾差异（CRLF / LF），避免仅因换行导致重复提交
+          const isText = !binary;
+          const normalize = (buf) => buf.toString('utf8').replace(/\r\n/g, '\n');
+          if (isText ? normalize(remote) === normalize(buffer) : remote.equals(buffer)) {
             skipped += 1;
             continue;
           }
