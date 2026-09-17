@@ -186,26 +186,45 @@ function getJSON(url, t = 8000) {
     await new Promise((r) => setTimeout(r, 1200));
 
     const amapAudit = JSON.parse(await evaluate(`JSON.stringify((function () {
-      const texts = Array.from(document.querySelectorAll('.amap-marker-label, .amap-overlay-text-container, .amap-text'));
-      const contents = texts.map(function (t) { return (t.textContent || '').trim(); }).filter(Boolean);
-      const hopLabels = contents.filter(function (c) { return /第\\s*\\d+\\s*跳/.test(c); });
+      // 高德模式下拓扑由内置引擎绘制到叠加层，标签在 SVG 图层里
+      const labels = Array.from(document.querySelectorAll('#node-overlay g text')).map(function (t) { return (t.textContent || '').trim(); });
+      const hopLabels = labels.filter(function (c) { return /第\\s*[\\d-]+\\s*跳/.test(c); });
+      const overlay = document.getElementById('overlay-canvas');
+      let overlayInk = 0;
+      try {
+        const ctx = overlay.getContext('2d');
+        const img = ctx.getImageData(0, 0, overlay.width, Math.min(overlay.height, 500)).data;
+        for (let i = 0; i < img.length; i += 4 * 17) {
+          if (img[i] + img[i + 1] + img[i + 2] + img[i + 3] > 30) overlayInk += 1;
+        }
+      } catch (e) {
+        overlayInk = -1;
+      }
+      const r = window.NetScopeApp.renderer();
       return {
-        textOverlayCount: texts.length,
-        contentsSample: contents.slice(0, 12),
+        labelCount: labels.length,
+        labelsSample: labels.slice(0, 8),
         hopLabelCount: hopLabels.length,
-        hopLabelsSample: hopLabels.slice(0, 8),
-        markers: document.querySelectorAll('.amap-marker').length,
+        hopLabelsSample: hopLabels.slice(0, 6),
+        labelElements: document.querySelectorAll('#node-overlay g').length,
+        overlayInkSamples: overlayInk,
+        plainMode: r.plain === true,
+        rendererCanvasId: r.canvas ? r.canvas.id : null,
+        ctxMatchesCanvas: r.ctx && r.canvas ? r.ctx.canvas === r.canvas : null,
         canvasHidden: document.getElementById('map-canvas').hidden,
       };
     })())`));
-    console.log(`高德文字覆盖物：${amapAudit.textOverlayCount} 个（marker ${amapAudit.markers} 个）`);
-    console.log(`含"第 N 跳"的标签：${amapAudit.hopLabelCount} 个 ${JSON.stringify(amapAudit.hopLabelsSample)}`);
-    console.log(`文字样本：${JSON.stringify(amapAudit.contentsSample)}`);
+    console.log(`高德模式标签：${amapAudit.labelCount} 个（含跳数 ${amapAudit.hopLabelCount} 个）`);
+    console.log(`  标签样本：${JSON.stringify(amapAudit.hopLabelsSample)}`);
+    console.log(`  叠加层：plain=${amapAudit.plainMode} 画布=${amapAudit.rendererCanvasId} 上下文匹配=${amapAudit.ctxMatchesCanvas} 着墨样本=${amapAudit.overlayInkSamples}`);
+    if (!amapAudit.plainMode) failures.push('问题 2：高德模式未使用叠加层绘制');
+    if (amapAudit.ctxMatchesCanvas !== true) failures.push('问题 2：渲染上下文与叠加画布不匹配（会画到隐藏画布上）');
+    if (amapAudit.overlayInkSamples <= 0) failures.push('问题 2：叠加层画布没有内容');
     if (amapAudit.hopLabelCount === 0) {
-      failures.push('问题 2：高德底图连线缺少跳数标签');
-      console.log('✘ 复现成功：高德模式下看不到跳数');
+      failures.push('问题 2：高德底图看不到跳数');
+      console.log('✘ 复现：高德模式下看不到跳数');
     } else {
-      console.log('✔ 高德模式已显示跳数标签');
+      console.log('✔ 高德模式已显示跳数与延迟');
     }
 
     /* ---- 切回内置地图 ---- */
