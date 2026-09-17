@@ -158,6 +158,7 @@
       quickTargets: $('quick-targets'),
       canvas: $('map-canvas'),
       canvasWrap: $('canvas-wrap'),
+      amapHost: $('amap-host'),
       overlay: $('node-overlay'),
       mapHint: $('map-hint'),
       mapStats: $('map-stats'),
@@ -338,6 +339,10 @@
         amapView.destroy();
         amapView = null;
       }
+      if (el.amapHost) {
+        el.amapHost.hidden = true;
+        el.amapHost.innerHTML = '';
+      }
       el.canvas.hidden = false;
       el.overlay.hidden = false;
       state.baseMap = 'builtin';
@@ -346,8 +351,10 @@
       } catch (e) {
         /* ignore */
       }
+      // 画布此前被隐藏过，重新显示后必须按当前布局重新量尺寸，
+      // 否则渲染尺寸仍是旧值（或在极端情况下取不到父元素）
       renderer.resize();
-      if (state.lan && renderer.lanMode) renderer.setLanTopology(state.lan.topology);
+      if (state.lan && renderer.lanMode && state.lan.topology) renderer.setLanTopology(state.lan.topology);
       else if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
       else renderer.fitToContainer();
       updateBaseMapStatus();
@@ -378,7 +385,14 @@
         if (amapView) return amapView;
         el.canvas.hidden = true;
         el.overlay.hidden = false;
-        var view = Amap.createAmapView(el.canvasWrap, el.overlay, {
+        if (el.amapHost) {
+          el.amapHost.hidden = false;
+          el.amapHost.innerHTML = '';
+        }
+        // 注意：必须用独立的高德容器。高德的 destroy() 会清空容器内容，
+        // 若直接挂在 canvas-wrap 上，切回内置地图时会把画布/标签层/统计栏一起删掉。
+        var host = el.amapHost || el.canvasWrap;
+        var view = Amap.createAmapView(host, el.overlay, {
           onReady: function () {
             updateBaseMapStatus('高德已启用');
           },
