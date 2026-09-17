@@ -336,7 +336,81 @@ function isDegenerateRing(flat, width, height) {
   return false;
 }
 
-function build(topology) {
+/* ------------------------------------------------------------------ */
+/* 行政区划（admin-1）边界线                                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Natural Earth 1:110m / 1:50m 的「一级行政区边界线」。
+ * 数据是 GeoJSON LineString / MultiLineString，投影方式与国界完全一致，
+ * 前端只需要按普通折线描边即可，因此单独放一个 provinces 数组。
+ */
+const ADMIN1_SOURCES = {
+  '110m': [
+    'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_110m_admin_1_states_provinces_lines.geojson',
+    'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces_lines.geojson',
+  ],
+  '50m': [
+    'https://cdn.jsdelivr.net/gh/nvkelso/natural-earth-vector@master/geojson/ne_50m_admin_1_states_provinces_lines.geojson',
+    'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_1_states_provinces_lines.geojson',
+  ],
+};
+
+/**
+ * 把 GeoJSON 的 admin-1 边界线转成投影后的折线数组
+ *
+ * 每条线同时输出包围盒（bbox），前端据此做视口裁剪 ——
+ * 否则每次平移缩放都要遍历上万个顶点，会明显掉帧。
+ *
+ * @param {object} geojson FeatureCollection
+ * @returns {{ provinces: object[], dropped: number, scaled: number }}
+ */
+function buildAdmin1(geojson) {
+  const provinces = [];
+  let dropped = 0;
+  let scaled = 0;
+
+  const addLine = (coords) => {
+    if (!Array.isArray(coords) || coords.length < 2) return;
+    // 复用与国界相同的日界线切分，避免出现横贯全图的假线段
+    const segments = clipToMapBounds(coords.map(([lon, lat]) => [lon, lat]));
+    for (const segment of segments) {
+      if (segment.length < 2) continue;
+      const flat = [];
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const [lon, lat] of segment) {
+        const [x, y] = project(lon, lat);
+        flat.push(x, y);
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      // 太短的线段（不足 1.5 像素）看不出效果，直接丢弃以压缩体积
+      if (maxX - minX < 1.5 && maxY - minY < 1.5) {
+        dropped += 1;
+        continue;
+      }
+      if (segment.length !== coords.length) scaled += 1;
+      provinces.push({
+        p: flat,
+        b: [Math.round(minX * 10) / 10, Math.round(minY * 10) / 10, Math.round(maxX * 10) / 10, Math.round(maxY * 10) / 10],
+      });
+    }
+  };
+
+  for (const feature of geojson.features || []) {
+    const geom = feature.geometry;
+    if (!geom) continue;
+    if (geom.type === 'LineString') addLine(geom.coordinates);
+    else if (geom.type === 'MultiLineString') {
+      for (const line of geom.coordinates) addLine(line);
+    }
+  }
+  return { provinces, dropped, scaled };
+}
+
+function build(topology, admin1Geo) {
   const decoded = decodeArcs(topology);
   const geometries = topology.objects.countries.geometries;
 
@@ -399,6 +473,8 @@ function build(topology) {
     });
   }
 
+  const admin1 = admin1Geo ? buildAdmin1(admin1Geo) : { provinces: [], dropped: 0, scaled: 0 };
+
   return {
     projection: 'equirectangular',
     width: WIDTH,
@@ -410,15 +486,20 @@ function build(topology) {
     // 供前端校验/调试使用：经纬方向一致的比例尺
     pxPerDegree: PX_PER_DEGREE,
     aspectRatio: Math.round((WIDTH / HEIGHT) * 10000) / 10000,
-    source: 'Natural Earth 1:110m（world-atlas TopoJSON）',
+    source: 'Natural Earth 1:110m（world-atlas TopoJSON）' + (admin1Geo ? ' + admin-1 州省边界线' : ''),
     generatedAt: new Date().toISOString(),
     stats: {
       countries: countries.length,
       rings: countries.reduce((acc, c) => acc + c.rings.length, 0),
       splitRings: splitRingCount,
       droppedRings,
+      provinces: admin1.provinces.length,
+      droppedProvinces: admin1.dropped,
+      splitProvinces: admin1.scaled,
     },
     countries,
+    /** 一级行政区（省/州/地区）边界线，元素为 [x,y,x,y,…] */
+    provinces: admin1.provinces,
   };
 }
 
@@ -450,13 +531,37 @@ async function main() {
   }
 
   const topology = JSON.parse(text);
-  const output = build(topology);
+
+  // 行政区划（省/州/地区）边界线：默认使用 110m，可用 --admin1=50m 提高精度
+  const admin1Arg = process.argv.find((a) => a.startsWith('--admin1='));
+  const admin1Scale = admin1Arg ? admin1Arg.slice('--admin1='.length).trim() : '50m';
+  const skipAdmin1 = process.argv.includes('--no-admin1');
+  let admin1Geo = null;
+  if (!skipAdmin1) {
+    const urls = ADMIN1_SOURCES[admin1Scale] || ADMIN1_SOURCES['50m'];
+    for (const url of urls) {
+      try {
+        process.stdout.write(`→ 下载行政区划边界 ${admin1Scale} … `);
+        const json = await fetchText(url);
+        admin1Geo = JSON.parse(json);
+        console.log(`成功（${(json.length / 1024).toFixed(0)} KB）`);
+        break;
+      } catch (error) {
+        console.log(`失败：${error.message}`);
+        errors.push(`${url}: ${error.message}`);
+      }
+    }
+    if (!admin1Geo) console.log('！ 行政区划边界获取失败，本次仅生成国界（地图仍可正常使用）');
+  }
+
+  const output = build(topology, admin1Geo);
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(output), 'utf8');
 
   const size = fs.statSync(outFile).size;
   console.log(`\n✓ 已生成 ${outFile}`);
   console.log(`  国家/地区数量：${output.countries.length}`);
+  console.log(`  行政区划边界线：${output.stats.provinces} 条（丢弃过短 ${output.stats.droppedProvinces} 条）`);
   console.log(`  画布尺寸：${output.width}×${output.height}（等距圆柱投影，经度 ${LON_MIN}~${LON_MAX}，纬度 ${LAT_MIN}~${LAT_MAX}）`);
   console.log(`  文件体积：${(size / 1024).toFixed(1)} KB`);
   console.log(`  数据来源：${usedSource}`);
@@ -471,6 +576,7 @@ if (require.main === module) {
 
 module.exports = {
   build,
+  buildAdmin1,
   project,
   decodeArcs,
   ringFromArcIndexes,
