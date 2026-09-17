@@ -403,6 +403,11 @@
           local: context && context.local,
           target: context && context.target,
           merge: !graph,
+          // 必须把"是否确认到达目标"的信息一并透传：
+          // 否则未到达时不会生成 isUnconfirmedDestination 节点，
+          // 高德底图上就不会出现虚线终点（内置地图有、高德没有）。
+          unreached: context && context.unreached,
+          destinationGeo: context && context.destinationGeo,
         });
         reproject();
         renderer.draw();
