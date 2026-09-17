@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NetScope · 网络连接探测与世界地图拓扑图</title>
+    <meta name="description" content="输入 IP 或网址，探测网络连接质量、追踪完整路由，并在世界地图上绘制网络拓扑图。" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='42' fill='none' stroke='%2338bdf8' stroke-width='9'/%3E%3Cellipse cx='50' cy='50' rx='18' ry='42' fill='none' stroke='%2338bdf8' stroke-width='7'/%3E%3Cpath d='M10 50h80' stroke='%2338bdf8' stroke-width='7'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <!-- ======================= 顶栏 ======================= -->
+    <header class="topbar">
+      <div class="brand">
+        <svg class="brand-logo" viewBox="0 0 100 100" aria-hidden="true">
+          <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" stroke-width="9" />
+          <ellipse cx="50" cy="50" rx="18" ry="42" fill="none" stroke="currentColor" stroke-width="7" />
+          <path d="M10 50h80" stroke="currentColor" stroke-width="7" />
+        </svg>
+        <div class="brand-text">
+          <strong>NetScope</strong>
+          <span>网络连接探测 · 世界地图拓扑</span>
+        </div>
+      </div>
+
+      <form class="target-form" id="target-form" autocomplete="off">
+        <span class="target-icon" aria-hidden="true">⌖</span>
+        <input
+          id="target-input"
+          name="target"
+          type="text"
+          placeholder="输入 IP、域名或网址，例如 8.8.8.8 / www.baidu.com / https://github.com"
+          spellcheck="false"
+        />
+        <button type="submit" class="btn btn-primary" id="btn-run" title="开始探测（Enter）">
+          <span class="btn-label">开始探测</span>
+        </button>
+      </form>
+
+      <div class="topbar-actions">
+        <button class="btn btn-ghost btn-icon" id="btn-sidebar" title="显示/隐藏左侧控制面板" aria-label="显示或隐藏控制面板">☰</button>
+        <button class="btn btn-ghost btn-icon" id="btn-panel" title="显示/隐藏右侧数据面板" aria-label="显示或隐藏数据面板">▤</button>
+        <button class="btn btn-ghost" id="btn-diagnose" title="完整诊断：连通性 + 路由 + 地理定位">深度诊断</button>
+        <button class="btn btn-ghost" id="btn-export" title="导出当前拓扑数据">导出</button>
+        <button class="btn btn-ghost" id="btn-selftest" title="检查本机探测能力与数据源可用性">环境自检</button>
+        <span class="status-pill" id="server-status" title="后端服务状态">连接中…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+      <!-- ======================= 左侧控制面板 ======================= -->
+      <aside class="sidebar" id="sidebar">
+        <section class="panel">
+          <h2 class="panel-title">快速目标</h2>
+          <div class="chips" id="quick-targets">
+            <button class="chip" data-target="www.baidu.com">百度</button>
+            <button class="chip" data-target="www.aliyun.com">阿里云</button>
+            <button class="chip" data-target="github.com">GitHub</button>
+            <button class="chip" data-target="www.google.com">Google</button>
+            <button class="chip" data-target="8.8.8.8">Google DNS</button>
+            <button class="chip" data-target="1.1.1.1">Cloudflare DNS</button>
+            <button class="chip" data-target="223.5.5.5">阿里 DNS</button>
+            <button class="chip" data-target="www.tsinghua.edu.cn">清华</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">探测参数</h2>
+          <div class="field">
+            <label for="opt-maxhops">最大跳数 <b id="val-maxhops">30</b></label>
+            <input type="range" id="opt-maxhops" min="4" max="64" step="1" value="30" />
+          </div>
+          <div class="field">
+            <label for="opt-queries">每跳探测次数 <b id="val-queries">3</b></label>
+            <input type="range" id="opt-queries" min="1" max="5" step="1" value="3" />
+          </div>
+          <div class="field">
+            <label for="opt-timeout">单跳超时（毫秒） <b id="val-timeout">900</b></label>
+            <input type="range" id="opt-timeout" min="300" max="3000" step="100" value="900" />
+          </div>
+          <div class="field field-inline">
+            <label class="switch">
+              <input type="checkbox" id="opt-resolvenames" checked />
+              <span>反向解析主机名</span>
+            </label>
+          </div>
+          <div class="field">
+            <label for="opt-engine">追踪引擎</label>
+            <select id="opt-engine">
+              <option value="auto">自动（原生套接字优先，失败回退系统命令）</option>
+              <option value="socket">原生 ICMP 套接字</option>
+              <option value="system">系统命令（tracert / traceroute）</option>
+            </select>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">本机网络拓扑</h2>
+          <p class="hint">读取网卡、默认网关、DNS、ARP 邻居表，绘制当前所在网络的结构图。</p>
+          <div class="btn-row">
+            <button class="btn btn-secondary" id="btn-local">发现本机网络</button>
+            <button class="btn btn-ghost btn-sm" id="btn-egress" title="获取公网出口 IP 与归属地">出口信息</button>
+          </div>
+          <label class="switch switch-sm">
+            <input type="checkbox" id="opt-listenports" />
+            <span>包含本机监听端口（netstat）</span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">端口扫描</h2>
+          <div class="field">
+            <label for="opt-scanmode">扫描范围</label>
+            <select id="opt-scanmode">
+              <option value="quick">常用端口（约 60 个）</option>
+              <option value="custom">自定义端口列表</option>
+              <option value="range">端口区间</option>
+            </select>
+          </div>
+          <div class="field" id="field-scanports" hidden>
+            <label for="opt-scanports">端口（逗号分隔）</label>
+            <input type="text" id="opt-scanports" placeholder="80,443,3306,8080" />
+          </div>
+          <div class="field" id="field-scanrange" hidden>
+            <label>端口区间</label>
+            <div class="range-row">
+              <input type="number" id="opt-scanfrom" min="1" max="65535" value="1" />
+              <span>—</span>
+              <input type="number" id="opt-scanto" min="1" max="65535" value="1024" />
+            </div>
+          </div>
+          <button class="btn btn-secondary" id="btn-scan">扫描目标端口</button>
+          <p class="hint danger">请仅扫描你拥有或已获授权的目标。</p>
+        </section>
+
+        <section class="panel">
+          <h2 class="panel-title">显示选项</h2>
+          <label class="switch switch-sm"><input type="checkbox" id="opt-show-labels" checked /><span>显示节点标签</span></label>
+          <label class="switch switch-sm"><input type="checkbox" id="opt-show-links" checked /><span>显示连线与跳数</span></label>
+          <label class="switch switch-sm"><input type="checkbox" id="opt-show-grid" /><span>显示经纬网格</span></label>
+          <label class="switch switch-sm"><input type="checkbox" id="opt-animate" checked /><span>数据包流动画</span></label>
+          <label class="switch switch-sm"><input type="checkbox" id="opt-night" /><span>昼夜分界</span></label>
+          <div class="field">
+            <label for="opt-color">连线着色</label>
+            <select id="opt-color">
+              <option value="latency">按延迟（绿→红）</option>
+              <option value="hop">按跳数（渐变蓝）</option>
+              <option value="loss">按丢包率</option>
+              <option value="plain">单色</option>
+            </select>
+          </div>
+        </section>
+      </aside>
+
+      <!-- ======================= 中间地图区 ======================= -->
+      <section class="map-area">
+        <div class="map-toolbar">
+          <div class="map-toolbar-group">
+            <button class="tool" id="btn-zoom-in" title="放大">＋</button>
+            <button class="tool" id="btn-zoom-out" title="缩小">－</button>
+            <button class="tool" id="btn-reset-view" title="重置视图">⤢</button>
+          </div>
+          <div class="map-toolbar-group">
+            <span class="view-switch">
+              <button class="tool tool-text is-active" data-view="map" title="世界地图视图">世界地图</button>
+              <button class="tool tool-text" data-view="graph" title="逻辑拓扑视图">逻辑拓扑</button>
+            </span>
+          </div>
+          <div class="map-toolbar-group map-legend" id="map-legend">
+            <span class="legend-item"><i class="dot dot-start"></i>起点</span>
+            <span class="legend-item"><i class="dot dot-hop"></i>中间节点</span>
+            <span class="legend-item"><i class="dot dot-target"></i>目标</span>
+            <span class="legend-item"><i class="dot dot-timeout"></i>无响应</span>
+          </div>
+        </div>
+
+        <div class="canvas-wrap" id="canvas-wrap">
+          <canvas id="map-canvas"></canvas>
+          <svg id="node-overlay" class="node-overlay"></svg>
+          <div class="map-stats" id="map-stats" hidden>
+            <div class="stat stat-wide"><span class="stat-label">目标</span><b id="stat-target" title="">—</b></div>
+            <div class="stat"><span class="stat-label">跳数</span><b id="stat-hops">—</b></div>
+            <div class="stat"><span class="stat-label">已定位</span><b id="stat-located">—</b></div>
+            <div class="stat"><span class="stat-label">未定位</span><b id="stat-unlocated">—</b></div>
+            <div class="stat"><span class="stat-label">总延迟</span><b id="stat-rtt">—</b></div>
+            <div class="stat"><span class="stat-label">国家/地区</span><b id="stat-countries">—</b></div>
+            <div class="stat"><span class="stat-label">地理跨度</span><b id="stat-distance">—</b></div>
+          </div>
+          <div class="map-hint" id="map-hint">
+            <p>输入一个 IP 或网址，开始绘制网络拓扑图</p>
+            <p class="sub">滚轮缩放 · 拖动平移 · 悬停查看节点详情 · 点击节点锁定信息</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= 右侧数据面板 ======================= -->
+      <aside class="inspector" id="inspector">
+        <nav class="tabs" id="tabs">
+          <button class="tab is-active" data-tab="hops">路由跳点</button>
+          <button class="tab" data-tab="conn">连通性</button>
+          <button class="tab" data-tab="ports">端口</button>
+          <button class="tab" data-tab="local">本机网络</button>
+          <button class="tab" data-tab="dns">DNS</button>
+          <button class="tab" data-tab="security">安全</button>
+          <button class="tab tab-close" id="tab-close" title="收起数据面板">✕</button>
+        </nav>
+
+        <div class="tab-panels" id="tab-panels">
+          <section class="tab-panel is-active" data-panel="hops">
+            <div class="panel-head">
+              <h3>路由跳点</h3>
+              <span class="badge" id="hops-count">0</span>
+            </div>
+            <div class="table-scroll">
+              <table class="data-table" id="hops-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>地址 / 主机</th>
+                    <th>位置</th>
+                    <th>延迟</th>
+                    <th>丢包</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="empty-row"><td colspan="5">尚无数据，请先执行一次探测</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="chart-box">
+              <div class="panel-head"><h4>逐跳延迟</h4><span class="sub">单位 ms</span></div>
+              <canvas id="latency-chart" height="120"></canvas>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="conn">
+            <div class="panel-head"><h3>连通性测试</h3></div>
+            <div id="conn-content" class="content-box">
+              <p class="empty">尚无数据</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="ports">
+            <div class="panel-head"><h3>端口扫描结果</h3><span class="badge" id="ports-count">0</span></div>
+            <div id="ports-content" class="content-box">
+              <p class="empty">尚未扫描。可在左侧「端口扫描」中执行。</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="local">
+            <div class="panel-head"><h3>本机网络</h3></div>
+            <div id="local-content" class="content-box">
+              <p class="empty">点击左侧「发现本机网络」查看当前网络的拓扑结构。</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="dns">
+            <div class="panel-head"><h3>DNS 解析</h3></div>
+            <div id="dns-content" class="content-box">
+              <p class="empty">探测目标后自动展示解析结果。</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" data-panel="security">
+            <div class="panel-head"><h3>安全与证书</h3></div>
+            <div id="security-content" class="content-box">
+              <p class="empty">尚未检查。探测 HTTPS 目标时自动执行。</p>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </main>
+
+    <!-- ======================= 详情浮层 ======================= -->
+    <div class="node-card" id="node-card" hidden>
+      <button class="node-card-close" id="node-card-close" title="关闭">×</button>
+      <div id="node-card-body"></div>
+    </div>
+
+    <!-- ======================= 进度与提示 ======================= -->
+    <div class="toast-stack" id="toast-stack"></div>
+    <div class="progress-bar" id="progress-bar" hidden><div class="progress-inner" id="progress-inner"></div><span class="progress-text" id="progress-text"></span></div>
+
+    <script src="js/runtime-config.js"></script>
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/draw.js"></script>
+    <script src="js/export.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>

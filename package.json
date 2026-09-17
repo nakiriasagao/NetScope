@@ -1,0 +1,29 @@
+{
+  "name": "netscope",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NetScope - 网络连接探测与世界地图网络拓扑可视化工具（零第三方运行时依赖）",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js --port 8787",
+    "cli": "node bin/netscope.js",
+    "test": "node test/run-tests.js",
+    "build:map": "node tools/build-world-map.js"
+  },
+  "bin": {
+    "netscope": "bin/netscope.js"
+  },
+  "keywords": [
+    "network",
+    "topology",
+    "traceroute",
+    "geolocation",
+    "visualization"
+  ],
+  "license": "MIT"
+}

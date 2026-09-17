@@ -1,0 +1,28 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+
+# 运行时数据（缓存、导出、截图）
+data/geoip-cache.json
+data/exports/
+data/screenshots/
+data/*.log
+
+# 由服务端启动时自动生成
+public/js/runtime-config.js
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+yarn-error.log*
+tmp-*
+*.tmp
