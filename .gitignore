@@ -31,5 +31,6 @@ yarn-error.log*
 tmp-*
 *.tmp
 .git-commit-message.txt
+commit-msg.txt
 publish.log
 publish-dryrun.log
