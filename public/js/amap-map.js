@@ -155,15 +155,26 @@
 
     function colorFor(node) {
       var colors = window.NetScopeConfig.colors;
+      // 与内置引擎保持同一套规则：颜色表达角色，时延/丢包只标记异常
       if (node.role === 'self' || node.kind === 'start') return colors.start;
       if (node.isTarget || node.role === 'internet') return colors.target;
       if (node.role === 'gateway') return '#fbbf24';
-      if (typeof node.latency === 'number') {
-        if (node.latency <= 60) return colors.start;
-        if (node.latency <= 180) return colors.routeMid;
-        return colors.routeSlow;
-      }
+      var loss = typeof node.lossPct === 'number' ? node.lossPct : 0;
+      if (loss >= 50) return colors.routeSlow;
+      if (loss >= 20) return colors.routeMid;
+      if (typeof node.latency === 'number' && node.latency > 180) return colors.routeSlow;
       return colors.route;
+    }
+
+    /** 连线上要显示的跳数信息（与内置引擎的 arcLabel 保持一致） */
+    function hopLabelFor(from, to) {
+      var parts = [];
+      var ttl = to && to.ttl;
+      if (typeof ttl === 'number') parts.push('第 ' + ttl + ' 跳');
+      var latency = to && typeof to.latency === 'number' ? to.latency : null;
+      if (latency !== null) parts.push(latency + ' ms');
+      else if (to && typeof to.lossPct === 'number' && to.lossPct >= 100) parts.push('超时');
+      return parts.join(' · ');
     }
 
     /** 清空标签层并重绘 */
@@ -308,7 +319,12 @@
         var hopNodes = Object.keys(byKey).map(function (k) {
           var node = byKey[k];
           var latencies = node.hops.map(function (h) { return h.latency && h.latency.avg; }).filter(function (v) { return typeof v === 'number'; });
+          var losses = node.hops.map(function (h) { return h.latency && h.latency.lossPct; }).filter(function (v) { return typeof v === 'number'; });
           node.latency = latencies.length ? latencies[latencies.length - 1] : null;
+          node.lossPct = losses.length ? Math.max.apply(null, losses) : 0;
+          // 节点上取该位置最后一跳的 ttl，用于连线标签显示"第 N 跳"
+          var ttls = node.hops.map(function (h) { return h.ttl; }).filter(function (v) { return typeof v === 'number'; });
+          node.ttl = ttls.length ? ttls[ttls.length - 1] : null;
           node.color = colorFor(node);
           node.text = (node.label || '') + (typeof node.latency === 'number' ? '  ' + node.latency + ' ms' : '');
           return node;
@@ -321,6 +337,8 @@
           if (Math.abs(start.position[0] - first.position[0]) < 0.02 && Math.abs(start.position[1] - first.position[1]) < 0.02) {
             start.text = '本机 / 接入点' + (typeof first.latency === 'number' ? '  ' + first.latency + ' ms' : '');
             start.latency = first.latency;
+            start.lossPct = first.lossPct;
+            start.ttl = first.ttl;
             hopNodes.shift();
           }
         }
@@ -348,8 +366,10 @@
           });
         });
 
-        // 连线：只连接相邻的已定位节点（与内置地图保持一致的规则）
+        // 连线 + 连线上的跳数标签
+        // 之前这里只画了 BezierCurve，没有标签，导致高德模式下看不到"第 N 跳 / 时延"
         var lines = [];
+        var hopTexts = [];
         for (var i = 0; i < all.length - 1; i += 1) {
           var a = all[i];
           var b = all[i + 1];
@@ -362,9 +382,33 @@
             zIndex: 100,
           });
           lines.push(line);
+
+          var text = hopLabelFor(a, b);
+          if (text) {
+            var mid = [(a.position[0] + b.position[0]) / 2, (a.position[1] + b.position[1]) / 2];
+            hopTexts.push(
+              new AMap.Text({
+                text: text,
+                position: mid,
+                anchor: 'center',
+                offset: new AMap.Pixel(0, -6),
+                zIndex: 110,
+                style: {
+                  'background-color': 'rgba(7, 12, 22, 0.82)',
+                  'border': '1px solid ' + b.color,
+                  'border-radius': '4px',
+                  'color': b.color,
+                  'font-size': '11px',
+                  'font-family': '"Cascadia Mono", Consolas, monospace',
+                  'padding': '1px 5px',
+                  'white-space': 'nowrap',
+                },
+              }),
+            );
+          }
         }
 
-        overlays = markers.concat(lines);
+        overlays = markers.concat(lines).concat(hopTexts);
         if (overlays.length) {
           map.add(overlays);
           // 把节点与连线全部纳入视野；若只有零星节点，限制最大缩放级别，
