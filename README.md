@@ -397,6 +397,7 @@ node test/amap-e2e.js <key> <security>   # 高德底图验收（未配置 Key �
 node test/node-color-check.js     # 节点着色规则断言（13 种角色组合）
 node test/map-switch-e2e.js       # 底图切换与跳数标签验收
 node test/style-consistency-e2e.js # 图例完整性 + 两套底图样式一致性
+node test/lan-then-trace-e2e.js    # 扫描局域网后再探测的全流程回归
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
