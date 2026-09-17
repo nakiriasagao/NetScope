@@ -403,6 +403,8 @@ NetScope/
 
 ## 十、测试
 
+> 开发约定（含"**默认只跑增量测试**，除非明确要求全量"）见 [`AGENTS.md`](AGENTS.md)。
+
 ```powershell
 # 推荐：增量测试（只跑与本次改动相关的，几秒到几十秒）
 node test/run-tests.js --only=unit,admin1,lan
@@ -428,6 +430,7 @@ node test/graph-trace-e2e.js       # 探测外网的逻辑拓扑（含增量绘�
 node test/amap-graph-e2e.js        # 高德底图下的逻辑拓扑
 node test/basemap-keep-view-e2e.js # 切换底图时保持当前视图
 node test/lan-lock-view-e2e.js     # 扫描局域网后锁定世界地图
+node test/map-cache-e2e.js         # 世界地图数据缓存行为
 node test/admin1-map-e2e.js        # 世界地图的国家内地区划分
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
