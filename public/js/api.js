@@ -177,9 +177,14 @@
     lanScan: function (options) {
       return request('/api/lanscan', { method: 'POST', body: options || {} });
     },
-    /** 高德地图配置状态 */
-    amapConfig: function () {
-      return request('/api/amap/config');
+    /**
+     * 高德地图配置状态
+     * @param {{includePlain?: boolean}} [options] 传 includePlain 时服务端会附带明文密钥
+     *   （仅限本机回环请求），用于本地存储为空时回填，避免"每次都要重填 Key"。
+     */
+    amapConfig: function (options) {
+      var query = options && options.includePlain ? '?includePlain=1' : '';
+      return request('/api/amap/config' + query);
     },
     /** 保存高德配置 */
     amapSaveConfig: function (body) {
