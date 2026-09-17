@@ -452,9 +452,12 @@
         drawCurrentTrace();
         if (renderer.options.animate) renderer.startAnimation();
       } else if (state.hops.length) {
-        // 尊重当前视图：逻辑拓扑视图下切换底图仍应保持逻辑拓扑，
-        // 否则会出现"画面变成世界地图、但按钮还显示逻辑拓扑"的不一致
-        if (state.view === 'graph') renderer.setMode('graph');
+        // 尊重当前视图：切换底图不改变视图（世界地图仍世界地图、逻辑拓扑仍逻辑拓扑）。
+        // 必须显式对齐渲染模式 —— drawCurrentTrace 只按"当前模式"绘制、不会改模式，
+        // 若此前处于逻辑拓扑（mode=graph）而视图已回到世界地图，
+        // 内置渲染器就会用逻辑拓扑模式画，世界地图直接不显示。
+        var wantMode = state.view === 'graph' ? 'graph' : 'map';
+        if (renderer.mode !== wantMode) renderer.setMode(wantMode);
         drawCurrentTrace();
         if (renderer.options.animate) renderer.startAnimation();
       } else {
