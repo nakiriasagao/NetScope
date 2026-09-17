@@ -28,8 +28,8 @@
 ### 启动
 
 ```powershell
-git clone https://github.com/nakiriasagao/webtraceor.git
-cd webtraceor
+git clone https://github.com/nakiriasagao/NetScope.git
+cd NetScope
 node src/server.js
 ```
 
@@ -400,7 +400,62 @@ NetScope/
 
 ---
 
-## 十、测试
+## 十、打包分发（Windows 可执行文件 / Android APK）
+
+项目可以打包成**免安装的 Windows 程序**与 **Android 客户端**，目标机器都不需要装 Node.js。
+
+```powershell
+node tools/build-exe.js      # → dist/netscope.exe（约 89 MB，自带 Node 运行时）
+node tools/build-apk.js      # → dist/android/netscope-1.0.0.apk（约 16 KB）
+node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
+```
+
+### Windows 便携版
+
+产物在 `dist/` 下，**整个文件夹一起拷贝**即可在任何 Windows 10/11 上运行：
+
+| 文件 | 说明 |
+| --- | --- |
+| `netscope.exe` | 主程序，内置 Node 运行时，无需安装任何依赖 |
+| `public/` | 前端页面与地图数据（**必须与 exe 放在一起**） |
+| `data/` | 运行期缓存与导出文件（可删除，会自动重建） |
+| `启动 NetScope.bat` | 双击启动的批处理 |
+| `使用说明.txt` | 面向使用者的简短说明 |
+
+命令行参数：`--port 8787`、`--host 0.0.0.0`（允许局域网访问）、`--no-open`、`--help`。
+
+> **为什么不是严格单文件？** Node 的 SEA 机制对入口脚本的 `require()` 只支持内置模块，
+> 相对路径依赖会抛 `ERR_UNKNOWN_BUILTIN_MODULE`。项目已用自带的 `tools/bundle.js`
+> 把 `src/` 打包成单个文件再注入 exe，但**前端资源**仍从同级 `public/` 读取 ——
+> 因此交付形态是"单目录绿色版"，而不是"单文件"。
+
+### Android APK
+
+`dist/android/netscope-1.0.0.apk`：
+
+- 包名 `com.netscope.app`，最低 Android 5.0（API 21）；
+- 只申请 `INTERNET` 与 `ACCESS_NETWORK_STATE`，**不含**定位 / 存储 / 相机等敏感权限；
+- 使用 Debug 签名（可直接安装；上架应用商店需换成正式签名）。
+
+**它是 WebView 客户端**：NetScope 的探测能力跑在电脑上，手机端负责完整呈现界面。
+首次打开请点右上角菜单 →「设置」，填写电脑上 NetScope 的地址（如 `http://192.168.1.5:8787`）。
+
+> 手机访问的前提：电脑上以 `netscope.exe --host 0.0.0.0` 启动，防火墙放行该端口，
+> 且手机与电脑在同一局域网。
+
+### Android 构建工具
+
+APK 由 Android SDK 官方命令行工具链（`aapt2` / `d8` / `zipalign` / `apksigner`）直接构建，
+**不依赖 Gradle**。首次构建会自动下载工具（约 80 MB）：
+
+```powershell
+node tools/fetch-android-tools.js    # 下载 build-tools 与 android.jar 到 build/android-sdk
+node test/run-tests.js --only=bundle # 验收打包产物（会真实启动 exe）
+```
+
+---
+
+## 十一、测试
 
 > 开发约定（含"**默认只跑增量测试**，除非明确要求全量"）见 [`AGENTS.md`](AGENTS.md)。
 
@@ -460,7 +515,7 @@ node test/run-tests.js
 
 ---
 
-## 十一、常见问题
+## 十二、常见问题
 
 **Q：为什么某一跳显示"无响应"（`*`）？**
 骨干路由器普遍对 ICMP 限速或直接不响应探测包，这是**正常现象**，不代表链路中断。请结合前后跳的延迟与丢包判断。
@@ -482,6 +537,6 @@ node test/run-tests.js
 
 ---
 
-## 十二、许可
+## 十三、许可
 
 本项目为自用工具，代码可自由修改与分发。地图数据来源为 Natural Earth 1:110m（公有领域），由 `tools/build-world-map.js` 在构建期下载并预投影，运行时不依赖任何外部 CDN。
