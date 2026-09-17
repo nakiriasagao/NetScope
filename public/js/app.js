@@ -946,15 +946,25 @@
           other.classList.toggle('is-active', other === button);
         });
         state.view = view;
+
+        // 只有"当前展示的确实是局域网星型拓扑"时才保留星型模式。
+        // 一旦用新目标探测过（state.hops 有数据），就必须解掉星型模式，
+        // 否则渲染器会继续按星型布局画，"逻辑拓扑"看起来就是错的（甚至像没显示）。
+        var showingLanTopology = Boolean(state.lan && state.lan.topology) && state.hops.length === 0;
+        if (!showingLanTopology) renderer.lanMode = false;
+
         // 高德底图只提供地理视图。切到「逻辑拓扑」时**临时挂起**高德、
         // 改用内置引擎绘制，但保留用户选择的底图；切回世界地图时自动恢复高德。
         if (amapView) {
           if (view === 'graph') {
             amapView.suspend();
             renderer.setMode('graph');
-            if (state.lan && state.lan.topology) renderer.setLanTopology(state.lan.topology);
-            else if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
-            if (state.hops.length) renderer.layoutLogical();
+            if (showingLanTopology) renderer.setLanTopology(state.lan.topology);
+            else if (state.hops.length) {
+              // 逻辑拓扑按跳展开，不按地理坐标合并
+              renderer.setTrace(state.hops, { local: state.local, target: state.target, merge: false });
+              renderer.layoutLogical();
+            }
             renderer.draw();
           } else {
             // 先让内置引擎把模式切回地图（清掉逻辑布局），再交还给高德
@@ -964,12 +974,18 @@
           }
           return;
         }
-        if (state.lan && renderer.lanMode && state.lan.topology) {
+        if (showingLanTopology) {
           renderer.setLanTopology(state.lan.topology);
           return;
         }
         renderer.setMode(view);
-        if (state.hops.length) renderer.setTrace(state.hops, { local: state.local, target: state.target });
+        if (state.hops.length) {
+          renderer.setTrace(state.hops, {
+            local: state.local,
+            target: state.target,
+            merge: view !== 'graph',
+          });
+        }
       });
     });
 
@@ -1340,9 +1356,12 @@
     }
     // 追踪数据必须画在世界地图视图上：若此前停在逻辑拓扑（例如刚扫描过局域网），
     // 这里要显式切回 map，否则用户会以为"地图没显示"
-    renderer.setMode(state.view === 'graph' ? 'graph' : 'map');
-    renderer.setTrace(state.hops, context);
-    if (state.view === 'graph') renderer.layoutLogical();
+    var graph = state.view === 'graph';
+    renderer.setMode(graph ? 'graph' : 'map');
+    // 逻辑拓扑按"跳"展开，不按地理坐标合并：
+    // 否则"同一城市 6 跳"会被合并成 1 个点，看起来像拓扑没显示出来
+    renderer.setTrace(state.hops, { local: state.local, target: state.target, merge: !graph });
+    if (graph) renderer.layoutLogical();
     else renderer.fitToNodes();
     renderer.draw();
   }
