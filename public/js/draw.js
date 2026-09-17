@@ -64,7 +64,10 @@
 
   /** 按容器尺寸重设画布（含高分屏适配） */
   Renderer.prototype.resize = function () {
-    var rect = this.canvas.parentElement.getBoundingClientRect();
+    // 防御：容器或画布可能已被移除/隐藏（例如切换底图过程中），此时直接跳过而不是抛错
+    var parent = this.canvas && this.canvas.parentElement;
+    if (!this.canvas || !parent || typeof parent.getBoundingClientRect !== 'function') return;
+    var rect = parent.getBoundingClientRect();
     var w = Math.max(320, Math.floor(rect.width));
     var h = Math.max(240, Math.floor(rect.height));
     this.dpr = window.devicePixelRatio || 1;
@@ -1011,20 +1014,53 @@
     unknown: '#64748b',
   };
 
+  /**
+   * 节点着色规则
+   *
+   * 设计原则：**颜色表达"角色"，时延/丢包只用于标记"异常"**。
+   *
+   * 之前的问题：低时延的中间节点会被染成起点绿（与时延阈值直接返回绿色有关），
+   * 中时延节点又被染成黄色，与图例（中间节点=蓝色）不一致，用户无法判断谁是起点。
+   * 更糟的是：丢包 100% 的跳因为时延数值很小，被时延规则抢先判成绿色，
+   * 把"不通"误显示为"健康"。
+   *
+   * 现在的规则：
+   *   起点 / 本机            → 绿色（呼吸光晕）
+   *   目标                   → 粉色（带同心环）
+   *   中间节点（默认）        → 本色蓝
+   *   中间节点但有明显问题    → 黄色（时延偏高或丢包 ≥ 20%）
+   *   中间节点严重异常        → 红色（丢包 ≥ 50%、超时跳、时延 > 180ms）
+   *   完全无响应（* * *）     → 灰色
+   */
   Renderer.prototype.nodeColor = function (node) {
-    if (node.kind === 'gateway') return DEVICE_COLORS.gateway;
-    if (node.kind === 'internet') return DEVICE_COLORS.internet;
-    if (node.kind === 'start' || node.isStart) return COLORS.start;
-    if (node.isTarget) return COLORS.target;
-    if (node.lanMode || (node.deviceType && node.kind === 'device')) {
+    // 局域网星型拓扑：按设备类型着色（网关/本机/互联网/各类设备）
+    if (this.lanMode || node.kind === 'gateway' || node.kind === 'internet' || node.kind === 'device') {
+      if (node.kind === 'gateway') return DEVICE_COLORS.gateway;
+      if (node.kind === 'internet') return DEVICE_COLORS.internet;
+      if (node.kind === 'start' || node.isStart) return DEVICE_COLORS.self;
       return DEVICE_COLORS[node.deviceType] || DEVICE_COLORS.unknown;
     }
-    if (node.geoStatus === 'private') return COLORS.start;
-    if (typeof node.latency === 'number') {
-      if (node.latency <= cfg.latencyThresholds.good) return COLORS.start;
-      if (node.latency <= cfg.latencyThresholds.mid) return COLORS.routeMid;
-      return COLORS.routeSlow;
+
+    // 角色优先
+    if (node.isStart || node.kind === 'start') return COLORS.start;
+    if (node.isTarget) return COLORS.target;
+
+    // 完全无响应：灰色
+    var isTimeout = node.isTimeout === true
+      || (node.hops && node.hops.length > 0 && node.hops.every(function (h) { return h.isTimeout || typeof h.latency?.avg !== 'number'; }) && node.latency === null);
+    if (isTimeout) return COLORS.timeout;
+
+    // 异常信号：丢包优先于时延
+    var loss = typeof node.lossPct === 'number' ? node.lossPct : 0;
+    if (loss >= 50) return COLORS.routeSlow;
+    if (loss >= 20) return COLORS.routeMid;
+
+    var latency = node.latency;
+    if (typeof latency === 'number') {
+      if (latency > cfg.latencyThresholds.mid) return COLORS.routeSlow; // > 180ms
     }
+
+    // 正常中间节点：本色蓝
     return COLORS.route;
   };
 
@@ -1092,8 +1128,11 @@
 
     var ns = 'http://www.w3.org/2000/svg';
     var placed = [];
-    // 星型拓扑：所有标签都显示；普通路由拓扑：节点超过 4 个时只显示悬停/选中的
-    var showAll = this.lanMode === true || this.nodes.length <= 4;
+    // 标签显示策略：
+    //   星型拓扑（局域网）—— 全部显示，设备数通常不多；
+    //   路由拓扑 —— 节点不太多时全部显示；节点很多（>8）时只显示悬停/选中的，
+    //               避免十几个标签糊在一起反而看不清。
+    var showAll = this.lanMode === true || this.nodes.length <= 8;
 
     this.nodes.forEach(function (node) {
       var pos = self.nodeScreen(node);
