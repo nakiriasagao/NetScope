@@ -97,11 +97,19 @@
 
         <section class="panel">
           <h2 class="panel-title">本机网络拓扑</h2>
-          <p class="hint">读取网卡、默认网关、DNS、ARP 邻居表，绘制当前所在网络的结构图。</p>
+          <p class="hint">读取网卡、默认网关、DNS、ARP 邻居表；启用局域网扫描还能发现同网段的其他设备，并画出星型拓扑图。</p>
           <div class="btn-row">
-            <button class="btn btn-secondary" id="btn-local">发现本机网络</button>
-            <button class="btn btn-ghost btn-sm" id="btn-egress" title="获取公网出口 IP 与归属地">出口信息</button>
+            <button class="btn btn-secondary" id="btn-lanscan">扫描局域网设备</button>
+            <button class="btn btn-ghost btn-sm" id="btn-local">仅本机信息</button>
           </div>
+          <div class="btn-row" style="margin-top:8px">
+            <button class="btn btn-ghost btn-sm" id="btn-egress" title="获取公网出口 IP 与归属地">出口信息</button>
+            <button class="btn btn-ghost btn-sm" id="btn-settings" title="配置高德地图 Key">⚙ 地图设置</button>
+          </div>
+          <label class="switch switch-sm">
+            <input type="checkbox" id="opt-deepscan" checked />
+            <span>深度扫描（主动探测整个网段，约 5~30 秒）</span>
+          </label>
           <label class="switch switch-sm">
             <input type="checkbox" id="opt-listenports" />
             <span>包含本机监听端口（netstat）</span>
@@ -165,7 +173,15 @@
             <span class="view-switch">
               <button class="tool tool-text is-active" data-view="map" title="世界地图视图">世界地图</button>
               <button class="tool tool-text" data-view="graph" title="逻辑拓扑视图">逻辑拓扑</button>
-            </span>
+          </span>
+          </div>
+          <div class="map-toolbar-group">
+            <label class="toolbar-label" for="opt-basemap">底图</label>
+            <select id="opt-basemap" class="toolbar-select" title="切换地图底图">
+              <option value="builtin">内置世界地图（全球）</option>
+              <option value="amap">高德地图（需配置 Key）</option>
+            </select>
+            <span class="basemap-status" id="basemap-status"></span>
           </div>
           <div class="map-toolbar-group map-legend" id="map-legend">
             <span class="legend-item"><i class="dot dot-start"></i>起点</span>
@@ -178,18 +194,20 @@
         <div class="canvas-wrap" id="canvas-wrap">
           <canvas id="map-canvas"></canvas>
           <svg id="node-overlay" class="node-overlay"></svg>
-          <!-- 统计栏：整条与画布左右对齐；目标行独占一行，长度自适应 -->
+          <!-- 统计栏：左右两端对齐，中间自适应；地址再长也不会挤压右侧 KPI -->
           <div class="map-stats" id="map-stats" hidden>
-            <div class="stat stat-target-row">
+            <div class="stats-left">
               <span class="stat-label">目标</span>
               <b class="stat-value" id="stat-target">—</b>
             </div>
-            <div class="stat"><span class="stat-label">跳数</span><b class="stat-value" id="stat-hops">—</b></div>
-            <div class="stat"><span class="stat-label">已定位</span><b class="stat-value" id="stat-located">—</b></div>
-            <div class="stat"><span class="stat-label">未定位</span><b class="stat-value" id="stat-unlocated">—</b></div>
-            <div class="stat"><span class="stat-label">总延迟</span><b class="stat-value" id="stat-rtt">—</b></div>
-            <div class="stat"><span class="stat-label">国家/地区</span><b class="stat-value" id="stat-countries">—</b></div>
-            <div class="stat"><span class="stat-label">跨度</span><b class="stat-value" id="stat-distance">—</b></div>
+            <div class="stats-right">
+              <div class="stat"><span class="stat-label">跳数</span><b class="stat-value" id="stat-hops">—</b></div>
+              <div class="stat"><span class="stat-label">已定位</span><b class="stat-value" id="stat-located">—</b></div>
+              <div class="stat"><span class="stat-label">未定位</span><b class="stat-value" id="stat-unlocated">—</b></div>
+              <div class="stat"><span class="stat-label">总延迟</span><b class="stat-value" id="stat-rtt">—</b></div>
+              <div class="stat"><span class="stat-label">国家/地区</span><b class="stat-value" id="stat-countries">—</b></div>
+              <div class="stat"><span class="stat-label">跨度</span><b class="stat-value" id="stat-distance">—</b></div>
+            </div>
           </div>
           <div class="map-hint" id="map-hint">
             <p>输入一个 IP 或网址，开始绘制网络拓扑图</p>
@@ -276,6 +294,53 @@
       </aside>
     </main>
 
+    <!-- ======================= 设置对话框（高德地图） ======================= -->
+    <div class="modal-backdrop" id="settings-modal" hidden>
+      <div class="modal">
+        <header class="modal-head">
+          <h3>地图设置 · 高德地图 (AMap)</h3>
+          <button class="modal-close" id="settings-close" title="关闭">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="hint">
+            高德 JS API 需要 Key 才能加载底图。请到
+            <a href="https://console.amap.com/dev/key/app" target="_blank" rel="noopener noreferrer">高德控制台</a>
+            申请（需先完成个人开发者实名认证）：
+          </p>
+          <ol class="hint-list">
+            <li>「应用管理 → 我的应用 → 创建新应用」；</li>
+            <li>添加 Key 两次：一次选「Web端(JS API)」用于加载底图，一次选「Web服务」用于 IP 定位等接口；</li>
+            <li>在 Key 的「设置」里查看<b>安全密钥(jscode)</b> —— 2021-12-02 之后申请的 Key 必须填写；</li>
+            <li>域名白名单建议设为「不限制」，否则用 127.0.0.1 访问可能报 INVALID_USER_DOMAIN。</li>
+          </ol>
+
+          <div class="field">
+            <label for="amap-key">Key（32 位十六进制）</label>
+            <input type="text" id="amap-key" placeholder="例如 a1b2c3d4e5f60718293a4b5c6d7e8f90" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label for="amap-security">安全密钥 jscode（32 位十六进制）</label>
+            <input type="text" id="amap-security" placeholder="与 Key 配套的安全密钥" spellcheck="false" />
+          </div>
+          <label class="switch switch-sm">
+            <input type="checkbox" id="amap-enabled" checked />
+            <span>启用高德底图（关闭则使用内置世界地图）</span>
+          </label>
+          <p class="hint" style="margin-top:8px">
+            密钥保存在本机：<code>data/amap-config.json</code>（已加入 .gitignore，不会上传）。
+            安全密钥由服务端代理使用，不会出现在页面源码里。
+          </p>
+          <div id="amap-test-result" class="test-result"></div>
+        </div>
+        <footer class="modal-foot">
+          <button class="btn btn-ghost" id="amap-test">测试连接</button>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost" id="amap-clear">清空</button>
+          <button class="btn btn-primary" id="amap-save">保存并应用</button>
+        </footer>
+      </div>
+    </div>
+
     <!-- ======================= 详情浮层 ======================= -->
     <div class="node-card" id="node-card" hidden>
       <button class="node-card-close" id="node-card-close" title="关闭">×</button>
@@ -290,6 +355,7 @@
     <script src="js/config.js"></script>
     <script src="js/api.js"></script>
     <script src="js/draw.js"></script>
+    <script src="js/amap-map.js"></script>
     <script src="js/export.js"></script>
     <script src="js/app.js"></script>
   </body>
