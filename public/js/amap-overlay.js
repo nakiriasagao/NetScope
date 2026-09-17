@@ -26,6 +26,14 @@
 
   var STORAGE_KEY = 'netscope.amap.credentials';
 
+  /**
+   * 最近一次解析出的凭据
+   *
+   * authHeaders() 是同步接口（会被各处直接调用），因此把"最终生效的凭据"
+   * 缓存在这里；来源可能是 localStorage，也可能是服务端配置文件。
+   */
+  var activeCredentials = { key: '', security: '', enabled: true };
+
   function loadLocalCredentials() {
     try {
       var raw = window.localStorage.getItem(STORAGE_KEY);
@@ -42,8 +50,14 @@
   }
 
   function saveLocalCredentials(credentials) {
+    var normalized = {
+      key: String((credentials && credentials.key) || ''),
+      security: String((credentials && credentials.security) || ''),
+      enabled: credentials && credentials.enabled === false ? false : true,
+    };
+    activeCredentials = normalized;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
     } catch (e) {
       /* 隐私模式下可能失败，忽略即可（服务端仍会保存） */
     }
@@ -53,9 +67,75 @@
     return loadLocalCredentials();
   }
 
+  /**
+   * 解析凭据：优先用本地缓存的，本地没有时**回落到服务端保存的配置**
+   *
+   * 为什么必须这样：exe 版每次启动都会开一个新的应用窗口，
+   * 如果浏览器 localStorage 为空（换了 profile、清了缓存、或在另一台机器上），
+   * 只看 localStorage 就会误判"尚未配置 Key"，导致用户每次都要重填 ——
+   * 而服务端其实已经把 Key 存在 data/amap-config.json 里了。
+   *
+   * @param {boolean} force 为 true 时忽略本地缓存，强制以服务端配置为准
+   * @returns {Promise<{key:string,security:string,enabled:boolean,source:string}>}
+   */
+  function resolveCredentials(force) {
+    var local = loadLocalCredentials();
+    var hasLocal = Boolean(local.key || local.security);
+
+    if (hasLocal && !force) {
+      activeCredentials = local;
+      return Promise.resolve({
+        key: local.key, security: local.security, enabled: local.enabled, source: 'local',
+      });
+    }
+
+    // 本地没有 → 询问服务端（附带明文，仅回环请求可拿到）
+    // 注意全局名是 window.NetScopeAPI（api.js 导出，大写 API）
+    var loader = (window.NetScopeAPI && window.NetScopeAPI.amapConfig)
+      ? window.NetScopeAPI.amapConfig({ includePlain: true })
+      : Promise.resolve(null);
+
+    return Promise.resolve(loader)
+      .catch(function () {
+        return null;
+      })
+      .then(function (res) {
+        var cfg = res && res.config ? res.config : null;
+        // 服务端出于安全不回传明文 Key，但会给出是否已配置与密钥来源
+        if (!cfg || !cfg.configured) {
+          if (hasLocal) {
+            activeCredentials = local;
+            return { key: local.key, security: local.security, enabled: local.enabled, source: 'local' };
+          }
+          activeCredentials = { key: '', security: '', enabled: true };
+          return { key: '', security: '', enabled: true, source: 'none' };
+        }
+        // 服务端已配置：用它的 Key 加载脚本（明文由服务端在 /api/amap/config 里
+        // 通过 keyPlain 字段提供，仅在本地存储不可用时才需要）
+        if (cfg.keyPlain) {
+          var fromServer = {
+            key: String(cfg.keyPlain),
+            security: String(cfg.securityPlain || ''),
+            enabled: cfg.enabled !== false,
+          };
+          saveLocalCredentials(fromServer);
+          return {
+            key: fromServer.key, security: fromServer.security,
+            enabled: fromServer.enabled, source: 'server',
+          };
+        }
+        if (hasLocal) {
+          activeCredentials = local;
+          return { key: local.key, security: local.security, enabled: local.enabled, source: 'local' };
+        }
+        activeCredentials = { key: '', security: '', enabled: true };
+        return { key: '', security: '', enabled: true, source: 'server-no-plain' };
+      });
+  }
+
   /** 把凭据附加到请求头，供服务端代理使用 */
   function authHeaders() {
-    var cred = credentials();
+    var cred = activeCredentials.key ? activeCredentials : credentials();
     var headers = {};
     if (cred.key) headers['x-amap-key'] = cred.key;
     if (cred.security) headers['x-amap-security'] = cred.security;
@@ -95,25 +175,27 @@
     if (window.AMap && window.AMap.Map) return Promise.resolve(window.AMap);
     if (loaderPromise) return loaderPromise;
 
-    var cred = credentials();
-    if (!cred.key) {
-      return Promise.reject(new Error('尚未配置高德 Key，请点击右上角 ⚙ 设置'));
-    }
-
-    // 安全密钥必须在使用 JS API 之前设置到 window._AMapSecurityConfig
-    if (cred.security) {
-      window._AMapSecurityConfig = { securityJsCode: cred.security };
-    }
-
-    var url = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(cred.key);
-    if (opts.plugins && opts.plugins.length) {
-      url += '&plugin=' + opts.plugins.join(',');
-    }
-
-    loaderPromise = loadScript(url, opts.timeoutMs || 15000).catch(function (error) {
-      loaderPromise = null;
-      throw error;
-    });
+    // 凭据可能来自 localStorage，也可能来自服务端保存的配置（exe 版常见），
+    // 因此这里必须先异步解析，不能同步只看 localStorage。
+    loaderPromise = resolveCredentials(false)
+      .then(function (cred) {
+        if (!cred.key) {
+          throw new Error('尚未配置高德 Key，请点击右上角 ⚙ 设置');
+        }
+        // 安全密钥必须在使用 JS API 之前设置到 window._AMapSecurityConfig
+        if (cred.security) {
+          window._AMapSecurityConfig = { securityJsCode: cred.security };
+        }
+        var url = 'https://webapi.amap.com/maps?v=2.0&key=' + encodeURIComponent(cred.key);
+        if (opts.plugins && opts.plugins.length) {
+          url += '&plugin=' + opts.plugins.join(',');
+        }
+        return loadScript(url, opts.timeoutMs || 15000);
+      })
+      .catch(function (error) {
+        loaderPromise = null;
+        throw error;
+      });
     return loaderPromise;
   }
 
@@ -426,11 +508,18 @@
     loadAmap: loadAmap,
     createOverlayView: createOverlayView,
     credentials: credentials,
+    /** 异步解析凭据（本地优先，缺失时回落到服务端配置） */
+    resolveCredentials: resolveCredentials,
     loadLocalCredentials: loadLocalCredentials,
     saveLocalCredentials: saveLocalCredentials,
     authHeaders: authHeaders,
+    /** 当前是否有可用 Key（本地或服务端） */
     isConfigured: function () {
-      return Boolean(credentials().key);
+      return Boolean(activeCredentials.key || credentials().key);
+    },
+    /** 供设置面板在本地为空时回填服务端已保存的 Key */
+    ensureCredentials: function () {
+      return resolveCredentials(false);
     },
   };
 })();
