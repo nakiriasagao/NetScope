@@ -659,7 +659,34 @@ describe('parsers.parseTraceroute：混合域名 / PTR 形式', () => {
     const noise = parseTraceroute('Tracing route to nowhere\n\nTrace complete.', {});
     assert.strictEqual(noise.hops.length, 0);
     assert.strictEqual(noise.summary.destinationIP, null);
-    assert.strictEqual(noise.summary.reachedTarget, true, '显式 complete 视为到达');
+    // 「Trace complete」只表示 tracert 命令跑完了，**不等于到达目标**。
+    // 两者混淆曾导致轨迹断在广州骨干网时，界面把广州标成目的地（江苏的 IP）。
+    assert.strictEqual(noise.summary.commandCompleted, true, '命令确实正常结束');
+    assert.strictEqual(noise.summary.reachedTarget, false, '没有目标 IP 就不能算到达');
+  });
+
+  it('命令跑完但从未收到目标回应时，reachedTarget 必须为 false（回归）', () => {
+    // 真实场景：tracert 打满 30 跳、末段连续超时，最后仍打印「跟踪完成」
+    const out = lines(
+      '通过最多 30 个跃点跟踪到 111.55.78.24 的路由',
+      '',
+      '  1     1 ms     1 ms     1 ms  192.168.1.1',
+      '  2    10 ms    10 ms    10 ms  61.152.17.101',
+      '  8    12 ms    12 ms    12 ms  221.183.151.101',
+      '  9    13 ms    13 ms    13 ms  221.183.95.45',
+      ' 10    14 ms    14 ms    14 ms  221.183.59.54',
+      ' 11     *        *        *     请求超时。',
+      ' 12     *        *        *     请求超时。',
+      '',
+      '跟踪完成。',
+      '',
+    );
+    const r = parseTraceroute(out, { targetIP: '111.55.78.24', queries: 3, maxHops: 30 });
+    assert.strictEqual(r.complete, true, '命令正常结束');
+    assert.strictEqual(r.summary.commandCompleted, true);
+    assert.strictEqual(r.summary.reachedTarget, false, '末响应节点是中间路由器，不是目标');
+    assert.strictEqual(r.summary.lastRespondedIP, '221.183.59.54');
+    assert.strictEqual(r.summary.destinationIP, '111.55.78.24');
   });
 });
 
