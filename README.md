@@ -426,6 +426,11 @@ node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 无标签页，观感与原生程序一致）；**关闭该窗口即同时关闭后端服务**，后台不留进程。
 系统未装 Chrome/Edge 时回退为默认浏览器，此时用 Ctrl+C 退出。
 
+**设置会跨重启保留**：应用窗口使用固定的浏览器配置目录
+（`%LOCALAPPDATA%\NetScope\browser-profile`），因此高德 Key、底图偏好、界面设置
+都会记住，不需要每次重填。即使该目录被清空，高德 Key 也会从
+`data/amap-config.json` 自动回填。
+
 命令行参数：`--port 8787`、`--host 0.0.0.0`（允许局域网/手机访问）、`--no-window`、`--help`。
 
 > **为什么不是严格单文件？** Node 的 SEA 机制对入口脚本的 `require()` 只支持内置模块，
