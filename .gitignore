@@ -2,6 +2,9 @@
 node_modules/
 dist/
 build/
+# Android 前端资源：打包时由 tools/build-apk.js 从 public/ 复制而来，
+# 且已打进 APK，不需要入库（避免与 public/ 出现两份而不同步）
+android/assets/
 
 # 运行时数据（缓存、导出、截图）
 data/geoip-cache.json
