@@ -411,6 +411,7 @@ node test/lan-then-trace-e2e.js    # 扫描局域网后再探测的全流程回�
 node test/view-switch-basemap-e2e.js # 视图切换保持底图选择 + 绘制性能
 node test/topology-perf-e2e.js     # 两种拓扑的显示与分阶段性能采样
 node test/graph-trace-e2e.js       # 探测外网的逻辑拓扑（含增量绘制阶段）
+node test/amap-graph-e2e.js        # 高德底图下的逻辑拓扑
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
