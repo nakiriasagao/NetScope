@@ -135,6 +135,11 @@
     var renderer = config.renderer;
     var cb = config.callbacks || {};
 
+    // 进入高德模式前的渲染目标，销毁时用于复原
+    var originalCanvas = renderer.canvas;
+    var originalOverlay = renderer.overlay;
+    var originalMode = renderer.mode;
+
     var AMap = null;
     var map = null;
     var destroyed = false;
@@ -291,14 +296,23 @@
         destroyed = true;
         if (animFrame) cancelAnimationFrame(animFrame);
         animFrame = null;
-        // 复位叠加层状态，避免影响内置世界地图模式
+        // 关键：把渲染目标复原回内置画布。
+        // 否则 renderer 会继续往这个（已隐藏的）叠加层上画，
+        // 表现为"切回内置世界地图后只有底图、看不到拓扑"，再次探测也看不到更新。
+        if (originalCanvas) renderer.canvas = originalCanvas;
+        if (originalOverlay) renderer.overlay = originalOverlay;
         renderer.plain = false;
         renderer.reproject = null;
+        if (originalMode) renderer.mode = originalMode;
         renderer.stopAnimation();
         if (overlayCanvas) {
           overlayCanvas.hidden = true;
-          var ctx = overlayCanvas.getContext('2d');
-          if (ctx) ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          try {
+            var ctx = overlayCanvas.getContext('2d');
+            if (ctx) ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          } catch (e) {
+            /* ignore */
+          }
         }
         if (labelLayer) {
           while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
