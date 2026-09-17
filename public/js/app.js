@@ -957,17 +957,17 @@
         // 改用内置引擎绘制，但保留用户选择的底图；切回世界地图时自动恢复高德。
         if (amapView) {
           if (view === 'graph') {
-            amapView.suspend();
+            // 顺序很重要：先切模式，再挂起（挂起会显示内置画布、重新量尺寸并重绘一次）。
+            // 顺序反了会把刚画好的内容擦掉。
             renderer.setMode('graph');
+            amapView.suspend();
             if (showingLanTopology) renderer.setLanTopology(state.lan.topology);
-            else if (state.hops.length) {
-              // 逻辑拓扑按跳展开，不按地理坐标合并
-              renderer.setTrace(state.hops, { local: state.local, target: state.target, merge: false });
-              renderer.layoutLogical();
-            }
-            renderer.draw();
+            // 统一入口按"当前视图"决定合并规则（此时高德已挂起，会走内置渲染器）
+            drawCurrentTrace();
+            // 逻辑拓扑也要有数据包流动动画（与内置地图保持一致）
+            if (renderer.options.animate) renderer.startAnimation();
           } else {
-            // 先让内置引擎把模式切回地图（清掉逻辑布局），再交还给高德
+            // 先让内置引擎把模式切回地图，再交还给高德
             renderer.setMode('map');
             amapView.resume();
             amapView.setTrace(state.hops, { local: state.local, target: state.target });
@@ -979,13 +979,7 @@
           return;
         }
         renderer.setMode(view);
-        if (state.hops.length) {
-          renderer.setTrace(state.hops, {
-            local: state.local,
-            target: state.target,
-            merge: view !== 'graph',
-          });
-        }
+        if (state.hops.length) drawCurrentTrace();
       });
     });
 
@@ -1357,8 +1351,11 @@
   function drawCurrentTrace(options) {
     var opts = options || {};
     var graph = state.view === 'graph' && !renderer.lanMode;
+    // 高德处于挂起状态（逻辑拓扑视图）时不能再把数据交给它：
+    // 高德分支会按地理坐标合并，从而把"按跳展开"的逻辑拓扑覆盖成几个点。
+    var amapActive = amapView && typeof amapView.isSuspended === 'function' && !amapView.isSuspended();
 
-    if (amapView) {
+    if (amapActive) {
       amapView.setTrace(state.hops, { local: state.local, target: state.target });
       return;
     }
