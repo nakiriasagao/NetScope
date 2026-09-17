@@ -656,6 +656,14 @@ select {
   gap: 5px;
 }
 
+.legend-note {
+  color: var(--text-mute);
+  font-size: 11.5px;
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+  cursor: help;
+}
+
 .dot {
   width: 9px;
   height: 9px;
@@ -686,6 +694,18 @@ select {
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+/* 高德地图专用容器：铺满画布层，destroy() 时只影响自己 */
+.amap-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.amap-host[hidden] {
+  display: none !important;
 }
 
 #map-canvas {
