@@ -34,6 +34,8 @@
     baseMap: 'builtin',
     /** 因局域网扫描而临时切到内置地图时，记住用户原本选择的底图，下次探测时恢复 */
     pendingBaseMap: null,
+    /** 世界地图视图是否被锁定（扫描局域网后锁定，探测外网后解锁） */
+    viewLocked: false,
   };
 
   var renderer = null;
@@ -224,6 +226,7 @@
       optShowLabels: $('opt-show-labels'),
       optShowLinks: $('opt-show-links'),
       optShowGrid: $('opt-show-grid'),
+      optShowAdmin1: $('opt-show-admin1'),
       optAnimate: $('opt-animate'),
       optNight: $('opt-night'),
     };
@@ -369,7 +372,10 @@
       // 否则渲染尺寸仍是旧值（或在极端情况下取不到父元素）
       renderer.resize();
       if (state.lan && renderer.lanMode && state.lan.topology) {
-        renderer.setLanTopology(state.lan.topology);
+        // 局域网星型拓扑：保持显示（不因为换底图就切到世界地图）
+        state.view = 'graph';
+        drawCurrentTrace();
+        if (renderer.options.animate) renderer.startAnimation();
       } else if (state.hops.length) {
         // 尊重当前视图：逻辑拓扑视图下切换底图仍应保持逻辑拓扑，
         // 否则会出现"画面变成世界地图、但按钮还显示逻辑拓扑"的不一致
@@ -438,15 +444,21 @@
           }
           updateBaseMapStatus('高德已启用');
           // 把当前数据重绘到高德底图上。
-          // 注意：若当前是「逻辑拓扑」视图，必须立刻挂起高德——
+          // 注意：若当前是「逻辑拓扑」视图（含局域网星型拓扑），必须立刻挂起高德——
           // 否则画面会变成世界地图，而上方按钮仍显示逻辑拓扑（状态不一致）。
-          if (state.view === 'graph' && !renderer.lanMode) {
+          if (renderer.lanMode && state.lan && state.lan.topology) {
+            // 局域网星型拓扑：挂起高德后必须用 drawCurrentTrace 重绘，
+            // 直接调 setLanTopology 会因为它内部把 lanMode 置回 true 而与 drawCurrentTrace 的
+            // 合并逻辑打架，导致星型拓扑被逻辑拓扑覆盖。
             view.suspend();
             renderer.setMode('graph');
             drawCurrentTrace();
             if (renderer.options.animate) renderer.startAnimation();
-          } else if (state.lan && state.lan.topology) {
-            view.setLanTopology(state.lan.topology);
+          } else if (state.view === 'graph') {
+            view.suspend();
+            renderer.setMode('graph');
+            drawCurrentTrace();
+            if (renderer.options.animate) renderer.startAnimation();
           } else if (state.hops.length) {
             view.setTrace(state.hops, { local: state.local, target: state.target });
           }
@@ -470,9 +482,14 @@
           /* ignore */
         }
         renderer.resize();
-        // 回退时同样尊重当前视图（逻辑拓扑视图下不要切成世界地图）
-        if (state.view === 'graph' && !renderer.lanMode) renderer.setMode('graph');
-        if (state.hops.length) drawCurrentTrace();
+        // 回退时同样尊重当前视图（逻辑拓扑 / 局域网星型拓扑下不要切成世界地图）
+        if (renderer.lanMode && state.lan && state.lan.topology) {
+          if (state.view === 'graph') renderer.setMode('graph');
+          drawCurrentTrace();
+        } else {
+          if (state.view === 'graph') renderer.setMode('graph');
+          if (state.hops.length) drawCurrentTrace();
+        }
         if (renderer.options.animate) renderer.startAnimation();
         updateBaseMapStatus('加载失败，已回退');
         if (!opts.silent) {
@@ -635,6 +652,38 @@
     }
   }
 
+  /**
+   * 是否正在展示局域网星型拓扑（此时才需要锁定世界地图）
+   */
+  function isLanTopologyLocked() {
+    return Boolean(state.lan && state.lan.topology && renderer.lanMode);
+  }
+
+  /**
+   * 锁定 / 解锁「世界地图」视图
+   *
+   * 局域网设备使用私有地址、没有地理坐标，画到世界地图上没有意义，
+   * 所以扫描局域网后自动切到逻辑拓扑并禁用世界地图按钮，
+   * 直到用户下一次探测外网才恢复。
+   */
+  function setViewLock(locked) {
+    state.viewLocked = Boolean(locked);
+    var mapButton = document.querySelector('[data-view="map"]');
+    if (mapButton) {
+      if (mapButton.disabled !== Boolean(locked)) mapButton.disabled = Boolean(locked);
+      mapButton.classList.toggle('is-disabled', Boolean(locked));
+      mapButton.setAttribute('title', locked
+        ? '已扫描局域网：局域网设备没有地理坐标，探测外网后即可使用世界地图'
+        : '世界地图视图（地理拓扑）');
+    }
+    var toggle = document.getElementById('btn-view-toggle');
+    if (toggle) {
+      toggle.setAttribute('title', locked
+        ? '已扫描局域网：探测外网后即可切回世界地图'
+        : '切换视图');
+    }
+  }
+
   /** 把扫描结果画成星型拓扑（局域网设备没有经纬度，始终用内置引擎） */
   async function renderLanTopologyView(result) {
     var topology = result.topology || { nodes: [], links: [] };
@@ -660,6 +709,9 @@
     el.mapHint.hidden = true;
     el.mapStats.hidden = false;
     renderer.setLanTopology(topology);
+    // 锁定为逻辑拓扑：世界地图对局域网设备没有意义（私有地址没有地理坐标），
+    // 因此在用户下一次探测外网之前禁用「世界地图」按钮。
+    setViewLock(true);
     renderLanStats();
     renderHopsTableFromLan(topology);
   }
@@ -944,6 +996,7 @@
       [el.optShowLabels, 'showLabels'],
       [el.optShowLinks, 'showLinks'],
       [el.optShowGrid, 'showGrid'],
+      [el.optShowAdmin1, 'showAdmin1'],
       [el.optAnimate, 'animate'],
       [el.optNight, 'night'],
     ].forEach(function (pair) {
@@ -964,6 +1017,11 @@
     document.querySelectorAll('[data-view]').forEach(function (button) {
       button.addEventListener('click', function () {
         var view = button.getAttribute('data-view');
+        // 局域网扫描后已锁定为逻辑拓扑：世界地图按钮不可用
+        if (state.viewLocked && view === 'map') {
+          toast('已扫描局域网：局域网设备使用私有地址、没有地理坐标，探测外网后即可切回世界地图', 'warn', 7000);
+          return;
+        }
         document.querySelectorAll('[data-view]').forEach(function (other) {
           other.classList.toggle('is-active', other === button);
         });
@@ -1183,6 +1241,8 @@
     // 结果被画成按坐标合并的世界地图拓扑。
     renderer.lanMode = false;
     state.lan = null;
+    // 解锁世界地图：新的一次外网探测意味着地理拓扑重新有意义
+    setViewLock(false);
     if (amapView) amapView.setTrace([], {});
     else renderer.setTrace([], {});
     renderer.setSelected(null);
@@ -1372,7 +1432,17 @@
    */
   function drawCurrentTrace(options) {
     var opts = options || {};
-    var graph = state.view === 'graph' && !renderer.lanMode;
+    // 局域网的星型拓扑要优先于探测拓扑：
+    // 不能用 renderer.lanMode 判断——切底图/挂起高德时它会被重置，
+    // 会导致星型拓扑被逻辑拓扑覆盖（表现为"切底图后星型拓扑消失"）。
+    var lanTopology = state.lan && state.lan.topology;
+    var showLan = Boolean(lanTopology) && (renderer.lanMode || state.viewLocked);
+    if (showLan) {
+      renderer.mode = 'graph';
+      renderer.setLanTopology(lanTopology);
+      return;
+    }
+    var graph = state.view === 'graph';
     // 高德处于挂起状态（逻辑拓扑视图）时不能再把数据交给它：
     // 高德分支会按地理坐标合并，从而把"按跳展开"的逻辑拓扑覆盖成几个点。
     var amapActive = amapView && typeof amapView.isSuspended === 'function' && !amapView.isSuspended();
