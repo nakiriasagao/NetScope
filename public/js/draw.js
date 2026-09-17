@@ -289,9 +289,20 @@
    * @param {Array} hops 路由跳点（可含 geo 字段）
    * @param {{ local?: object, target?: object }} context
    */
+  /**
+   * 设置追踪数据并生成拓扑节点
+   *
+   * @param {Array} hops 逐跳数据
+   * @param {object} context { local, target, merge }
+   *   merge 默认 true：同一地理坐标的多个跳点合并为一个节点（世界地图视图，
+   *     避免同城多跳重叠成一堆标记）。
+   *   merge=false：**每一跳各成一个节点**（逻辑拓扑视图，
+   *     否则"上海 6 跳"会被合并成 1 个点，看起来像拓扑没显示出来）。
+   */
   Renderer.prototype.setTrace = function (hops, context) {
     var self = this;
     var ctx = context || {};
+    var mergeSameLocation = ctx.merge !== false;
     var nodes = [];
     var unlocated = [];
 
@@ -315,17 +326,19 @@
 
       var key = geo.lat.toFixed(2) + ',' + geo.lon.toFixed(2);
       var existing = null;
-      for (var i = 0; i < nodes.length; i += 1) {
-        if (nodes[i].geoKey === key) {
-          existing = nodes[i];
-          break;
+      if (mergeSameLocation) {
+        for (var i = 0; i < nodes.length; i += 1) {
+          if (nodes[i].geoKey === key) {
+            existing = nodes[i];
+            break;
+          }
         }
       }
       if (!existing) {
         var point = self.project(geo.lon, geo.lat);
         existing = {
           kind: 'hop',
-          geoKey: key,
+          geoKey: mergeSameLocation ? key : key + '#' + hop.ttl,
           lat: geo.lat,
           lon: geo.lon,
           x: point.x,
@@ -346,9 +359,16 @@
     });
 
     // 节点标签：优先城市，其次主机名，最后 IP
+    // 不合并时（逻辑拓扑）同一城市会有多个节点，标签加上序号以便区分
+    var labelCounter = {};
     nodes.forEach(function (node) {
       var first = node.hops[0] || {};
-      node.label = node.city || first.hostname || first.ip || '节点';
+      var baseLabel = node.city || first.hostname || first.ip || '节点';
+      if (!mergeSameLocation) {
+        labelCounter[baseLabel] = (labelCounter[baseLabel] || 0) + 1;
+        if (labelCounter[baseLabel] > 1) baseLabel = baseLabel + ' #' + labelCounter[baseLabel];
+      }
+      node.label = baseLabel;
       node.subtitle = [node.city, node.country].filter(Boolean).join(' · ') || (first.ip || '');
     });
 
@@ -586,7 +606,9 @@
       countries: [],
       lan: { subnet: topo.subnet || null, deviceCount: devices.length, byType: topo.byType || {} },
     };
-    this.stopAnimation();
+    // 星型拓扑同样保留流动光点动画，与探测逻辑拓扑保持一致
+    if (this.options.animate) this.startAnimation();
+    else this.stopAnimation();
     this.invalidateOverlay();
     this.draw();
   };
@@ -742,7 +764,7 @@
       this.overlayLastBuild = time;
       return true;
     }
-    var interval = this.mode === 'graph' ? 200 : 100;
+    var interval = this.mode === 'graph' ? 100 : 100;
     if (time - this.overlayLastBuild >= interval) {
       this.overlayLastBuild = time;
       return true;
@@ -1217,19 +1239,29 @@
     var ns = 'http://www.w3.org/2000/svg';
     var placed = [];
     // 标签显示策略：
-    //   星型拓扑（局域网）—— 全部显示，设备数通常不多；
-    //   路由拓扑 —— 节点不太多时全部显示；节点很多（>8）时只显示悬停/选中的，
-    //               避免十几个标签糊在一起反而看不清。
-    var showAll = this.lanMode === true || this.nodes.length <= 8;
+    //   1. 节点较多时**均匀抽样**（每隔若干个取一个），保证画面上始终有可读标签，
+    //      并且起点与目标一定显示；
+    //   2. 悬停 / 选中的节点始终显示；
+    //   3. 逐个避让，放不下就跳过该标签（宁可少显示，也不要叠成一团）。
+    //
+    // 注意：早期实现是"节点 > 8 就只显示悬停/选中的"，但函数开头已经清空了 SVG，
+    // 于是没有任何悬停时整层会永久空白（逻辑拓扑按跳展开后节点变多就会触发）。
+    var nodes = this.nodes;
+    var count = nodes.length;
+    var maxLabels = this.lanMode ? 24 : 14;
+    var stride = count > maxLabels ? Math.ceil(count / maxLabels) : 1;
+    var labeled = 0;
 
-    this.nodes.forEach(function (node) {
+    nodes.forEach(function (node, index) {
       var pos = self.nodeScreen(node);
       if (!isFinite(pos.x) || !isFinite(pos.y)) return;
       if (pos.x < -80 || pos.y < -40 || pos.x > self.width + 80 || pos.y > self.height + 40) return;
 
       var isHover = self.hovered === node;
       var isSelected = self.selected === node;
-      if (!showAll && !isHover && !isSelected) return;
+      // 起点 / 目标 / 悬停 / 选中始终显示；其余按 stride 抽样
+      var always = isHover || isSelected || node.isStart || node.isTarget;
+      if (!always && stride > 1 && index % stride !== 0) return;
 
       var text = node.label || '';
       // 节点标签：带上"第 N 跳"和时延，方便一眼看出每个点在第几跳、延迟多少
@@ -1244,15 +1276,24 @@
       var y = pos.y - h - 6;
       if (x + w > self.width - 6) x = Math.max(6, pos.x - w - 11);
       if (y < 6) y = pos.y + 10;
-      // 简单避让：与已放置标签重叠时下移
-      for (var attempt = 0; attempt < 5; attempt += 1) {
+      // 避让：与已放置标签重叠时依次尝试下移 / 上移 / 右移，都放不下就跳过
+      var fits = false;
+      var offsets = [0, h + 3, -(h + 3), 2 * (h + 3), -2 * (h + 3)];
+      for (var attempt = 0; attempt < offsets.length; attempt += 1) {
+        var ty = y + offsets[attempt];
+        if (ty < 6 || ty + h > self.height - 6) continue;
         var overlaps = placed.some(function (r) {
-          return !(x + w < r.x || x > r.x + r.w || y + h < r.y || y > r.y + r.h);
+          return !(x + w < r.x || x > r.x + r.w || ty + h < r.y || ty > r.y + r.h);
         });
-        if (!overlaps) break;
-        y += h + 3;
+        if (!overlaps) {
+          y = ty;
+          fits = true;
+          break;
+        }
       }
+      if (!fits && !always) return; // 放不下就不画，避免互相遮挡
       placed.push({ x: x, y: y, w: w, h: h });
+      labeled += 1;
 
       var group = document.createElementNS(ns, 'g');
       var rect = document.createElementNS(ns, 'rect');
@@ -1277,7 +1318,6 @@
       svg.appendChild(group);
     });
   };
-
   /** 命中测试：返回鼠标位置下的节点 */
   Renderer.prototype.hitTest = function (screenX, screenY) {
     var best = null;
@@ -1325,7 +1365,9 @@
     Object.keys(options || {}).forEach(function (key) {
       self.options[key] = options[key];
     });
-    if (this.options.animate && this.mode === 'map') this.startAnimation();
+    // 动画与视图模式无关：世界地图、逻辑拓扑、局域网星型拓扑都应保持一致，
+    // 否则会出现"星型拓扑画面静止、逻辑拓扑在动"的不一致观感
+    if (this.options.animate) this.startAnimation();
     else this.stopAnimation();
     this.invalidateOverlay();
     this.draw();
