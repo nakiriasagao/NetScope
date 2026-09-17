@@ -344,6 +344,10 @@ function isDegenerateRing(flat, width, height) {
  * Natural Earth 1:110m / 1:50m 的「一级行政区边界线」。
  * 数据是 GeoJSON LineString / MultiLineString，投影方式与国界完全一致，
  * 前端只需要按普通折线描边即可，因此单独放一个 provinces 数组。
+ *
+ * 注意：这份数据里混有**海上边界**（约 11% 的线段落在水域，
+ * 例如印尼/菲律宾的内部水域划界、以及争议边界的多套版本），
+ * 直接画出来就是"很多杂乱的线"。因此构建期会用陆地掩膜把它们滤掉。
  */
 const ADMIN1_SOURCES = {
   '110m': [
@@ -356,24 +360,223 @@ const ADMIN1_SOURCES = {
   ],
 };
 
+/** 陆地多边形（用于判断线段是否落在水域）—— world-atlas 的 land-50m */
+const LAND_SOURCES = [
+  'https://cdn.jsdelivr.net/npm/world-atlas@2.0.2/land-50m.json',
+  'https://unpkg.com/world-atlas@2.0.2/land-50m.json',
+];
+
+/**
+ * 解码 TopoJSON 的 arcs 为经纬度坐标（land-50m 带 transform 量化）
+ */
+function decodeLandArcs(topology) {
+  const t = topology.transform;
+  return topology.arcs.map((arc) => {
+    let x = 0;
+    let y = 0;
+    return arc.map(([dx, dy]) => {
+      x += dx;
+      y += dy;
+      return t ? [x * t.scale[0] + t.translate[0], y * t.scale[1] + t.translate[1]] : [x, y];
+    });
+  });
+}
+
+/** 由 arc 索引还原一个环 */
+function landRingFromArcs(indexes, decoded) {
+  const out = [];
+  for (const i of indexes) {
+    const arc = i < 0 ? decoded[~i].slice().reverse() : decoded[i];
+    for (let k = out.length ? 1 : 0; k < arc.length; k += 1) out.push(arc[k]);
+  }
+  return out;
+}
+
+/**
+ * 从 land-50m TopoJSON 提取所有陆地环（经纬度）
+ * @returns {number[][][]} 环数组
+ */
+function landRingsFromTopology(topology) {
+  const decoded = decodeLandArcs(topology);
+  const geom = topology.objects.land.geometries;
+  const rings = [];
+  for (const g of geom) {
+    const polygons = g.type === 'Polygon' ? [g.arcs] : g.arcs;
+    for (const polygon of polygons) {
+      for (const ringIndexes of polygon) rings.push(landRingFromArcs(ringIndexes, decoded));
+    }
+  }
+  return rings;
+}
+
+/** 射线法：点是否在环内 */
+function pointInRing(lon, lat, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+    if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * 陆地判定器（带空间索引）
+ *
+ * 陆地有 1400+ 个环，若每个点都遍历所有环，1.6 万个线段要跑上千万次
+ * 射线相交计算，构建会慢到不可接受。这里给每个环预计算包围盒，
+ * 并按 10°×10° 分桶，测试时只检查与点同桶及相邻桶的环。
+ */
+function makeLandTest(rings) {
+  const CELL = 10;
+  const cells = new Map();
+  const meta = rings.map((ring) => {
+    let minLon = Infinity;
+    let maxLon = -Infinity;
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    for (const [lon, lat] of ring) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+    return { ring, minLon, maxLon, minLat, maxLat };
+  });
+
+  const addToCell = (key, idx) => {
+    const list = cells.get(key);
+    if (list) list.push(idx);
+    else cells.set(key, [idx]);
+  };
+
+  for (let i = 0; i < meta.length; i += 1) {
+    const m = meta[i];
+    const x0 = Math.floor(m.minLon / CELL);
+    const x1 = Math.floor(m.maxLon / CELL);
+    const y0 = Math.floor(m.minLat / CELL);
+    const y1 = Math.floor(m.maxLat / CELL);
+    // 跨度过大的环（如欧亚大陆）放进全局桶，避免填满整个网格
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > 4000) {
+      addToCell('*', i);
+      continue;
+    }
+    for (let x = x0; x <= x1; x += 1) {
+      for (let y = y0; y <= y1; y += 1) addToCell(x + ',' + y, i);
+    }
+  }
+
+  return function isLand(lon, lat) {
+    // 极区不画分区线，直接放过（也避开投影误差）
+    if (lat > 83 || lat < -58) return true;
+    const cx = Math.floor(lon / CELL);
+    const cy = Math.floor(lat / CELL);
+    const candidates = [];
+    const global = cells.get('*');
+    if (global) candidates.push(global);
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        const list = cells.get((cx + dx) + ',' + (cy + dy));
+        if (list) candidates.push(list);
+      }
+    }
+    for (const list of candidates) {
+      for (let k = 0; k < list.length; k += 1) {
+        const m = meta[list[k]];
+        if (lon < m.minLon || lon > m.maxLon || lat < m.minLat || lat > m.maxLat) continue;
+        if (pointInRing(lon, lat, m.ring)) return true;
+      }
+    }
+    return false;
+  };
+}
+
+/**
+ * 把一条经纬度折线按"是否在陆地上"切成若干段：
+ * 完全在水里的部分直接丢弃，其余原样保留。
+ */
+function splitByLand(coords, isLand) {
+  const kept = [];
+  let current = null;
+  const pushPoint = (p) => {
+    if (!current) current = [p];
+    else current.push(p);
+  };
+  const flush = () => {
+    if (current && current.length >= 2) kept.push(current);
+    current = null;
+  };
+
+  for (let i = 0; i + 1 < coords.length; i += 1) {
+    const a = coords[i];
+    const b = coords[i + 1];
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const okMid = isLand(mid[0], mid[1]);
+    // 端点在海里但中点也在海里 → 整段丢弃
+    if (!okMid && !isLand(a[0], a[1]) && !isLand(b[0], b[1])) {
+      flush();
+      continue;
+    }
+    pushPoint(a);
+    pushPoint(b);
+  }
+  flush();
+  return kept;
+}
+
 /**
  * 把 GeoJSON 的 admin-1 边界线转成投影后的折线数组
  *
- * 每条线同时输出包围盒（bbox），前端据此做视口裁剪 ——
- * 否则每次平移缩放都要遍历上万个顶点，会明显掉帧。
+ * 关键处理：
+ *   1. **陆地掩膜**：丢掉落在水域里的线段（海上划界线是"杂乱线"的主要来源）；
+ *   2. **同段去重**：相邻省份会各存一份公共边界，坐标完全一致时只保留一条；
+ *   3. 日界线切分与国界一致，避免出现横贯全图的假线段；
+ *   4. 每条线输出包围盒（bbox），前端据此做视口裁剪。
  *
  * @param {object} geojson FeatureCollection
- * @returns {{ provinces: object[], dropped: number, scaled: number }}
+ * @param {(lon:number, lat:number) => boolean} [isLand] 陆地判断，缺省则不过滤
+ * @returns {{ provinces: object[], dropped: number, scaled: number, seaDropped: number, deduped: number }}
  */
-function buildAdmin1(geojson) {
+function buildAdmin1(geojson, isLand) {
   const provinces = [];
   let dropped = 0;
   let scaled = 0;
+  let seaDropped = 0;
+  const seen = new Set();
+  let deduped = 0;
+
+  /** 规范化线段键（两个方向视为同一段） */
+  const segKey = (ax, ay, bx, by) => {
+    const k1 = ax.toFixed(3) + ',' + ay.toFixed(3) + '|' + bx.toFixed(3) + ',' + by.toFixed(3);
+    const k2 = bx.toFixed(3) + ',' + by.toFixed(3) + '|' + ax.toFixed(3) + ',' + ay.toFixed(3);
+    return k1 < k2 ? k1 : k2;
+  };
 
   const addLine = (coords) => {
     if (!Array.isArray(coords) || coords.length < 2) return;
-    // 复用与国界相同的日界线切分，避免出现横贯全图的假线段
-    const segments = clipToMapBounds(coords.map(([lon, lat]) => [lon, lat]));
+    let lonLat = coords.map(([lon, lat]) => [lon, lat]);
+
+    // 1) 陆地掩膜：切成"在陆地上"的若干段
+    if (isLand) {
+      const before = lonLat.length;
+      const kept = splitByLand(lonLat, isLand);
+      if (!kept.length) {
+        seaDropped += 1;
+        return;
+      }
+      if (kept.length === 1 && kept[0].length === before) {
+        lonLat = kept[0];
+      } else {
+        // 被切开：分别递归处理每一段
+        kept.forEach(addLine);
+        return;
+      }
+    }
+
+    // 2) 日界线切分 + 裁剪到地图范围
+    const segments = clipToMapBounds(lonLat);
     for (const segment of segments) {
       if (segment.length < 2) continue;
       const flat = [];
@@ -391,9 +594,25 @@ function buildAdmin1(geojson) {
         dropped += 1;
         continue;
       }
-      if (segment.length !== coords.length) scaled += 1;
+      // 3) 同段去重（按投影后的线段键）
+      const localSeen = [];
+      for (let i = 0; i + 3 < flat.length; i += 2) {
+        const key = segKey(flat[i], flat[i + 1], flat[i + 2], flat[i + 3]);
+        if (seen.has(key)) {
+          deduped += 1;
+        } else {
+          seen.add(key);
+          localSeen.push(flat[i], flat[i + 1]);
+        }
+      }
+      if (localSeen.length >= 4) {
+        // 补上最后一个点，保证线段闭合到原始终点
+        localSeen.push(flat[flat.length - 2], flat[flat.length - 1]);
+      }
+      if (localSeen.length < 4) continue;
+      if (segment.length !== lonLat.length) scaled += 1;
       provinces.push({
-        p: flat,
+        p: localSeen,
         b: [Math.round(minX * 10) / 10, Math.round(minY * 10) / 10, Math.round(maxX * 10) / 10, Math.round(maxY * 10) / 10],
       });
     }
@@ -407,10 +626,10 @@ function buildAdmin1(geojson) {
       for (const line of geom.coordinates) addLine(line);
     }
   }
-  return { provinces, dropped, scaled };
+  return { provinces, dropped, scaled, seaDropped, deduped };
 }
 
-function build(topology, admin1Geo) {
+function build(topology, admin1Geo, isLand) {
   const decoded = decodeArcs(topology);
   const geometries = topology.objects.countries.geometries;
 
@@ -473,7 +692,7 @@ function build(topology, admin1Geo) {
     });
   }
 
-  const admin1 = admin1Geo ? buildAdmin1(admin1Geo) : { provinces: [], dropped: 0, scaled: 0 };
+  const admin1 = admin1Geo ? buildAdmin1(admin1Geo, isLand) : { provinces: [], dropped: 0, scaled: 0, seaDropped: 0, deduped: 0 };
 
   return {
     projection: 'equirectangular',
@@ -496,6 +715,8 @@ function build(topology, admin1Geo) {
       provinces: admin1.provinces.length,
       droppedProvinces: admin1.dropped,
       splitProvinces: admin1.scaled,
+      seaDroppedProvinces: admin1.seaDropped || 0,
+      dedupedSegments: admin1.deduped || 0,
     },
     countries,
     /** 一级行政区（省/州/地区）边界线，元素为 [x,y,x,y,…] */
@@ -554,14 +775,36 @@ async function main() {
     if (!admin1Geo) console.log('！ 行政区划边界获取失败，本次仅生成国界（地图仍可正常使用）');
   }
 
-  const output = build(topology, admin1Geo);
+  // 陆地掩膜：用于滤掉 admin-1 数据里落在水域的边界线
+  // （海上划界线不构成"地区划分"，直接画出来就是一堆杂乱的线）
+  let isLand = null;
+  if (admin1Geo) {
+    for (const url of LAND_SOURCES) {
+      try {
+        process.stdout.write('→ 下载陆地掩膜 land-50m … ');
+        const json = await fetchText(url);
+        const rings = landRingsFromTopology(JSON.parse(json));
+        isLand = makeLandTest(rings);
+        console.log(`成功（${rings.length} 个陆地环）`);
+        break;
+      } catch (error) {
+        console.log(`失败：${error.message}`);
+      }
+    }
+    if (!isLand) console.log('！ 陆地掩膜获取失败，本次不做海上过滤（可能出现零星海上线）');
+  }
+
+  const output = build(topology, admin1Geo, isLand);
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(output), 'utf8');
 
   const size = fs.statSync(outFile).size;
   console.log(`\n✓ 已生成 ${outFile}`);
   console.log(`  国家/地区数量：${output.countries.length}`);
-  console.log(`  行政区划边界线：${output.stats.provinces} 条（丢弃过短 ${output.stats.droppedProvinces} 条）`);
+  console.log(`  行政区划边界线：${output.stats.provinces} 条`);
+  console.log(`    · 滤除海上线段 ${output.stats.seaDroppedProvinces} 条`);
+  console.log(`    · 合并重复线段 ${output.stats.dedupedSegments} 段`);
+  console.log(`    · 丢弃过短 ${output.stats.droppedProvinces} 条`);
   console.log(`  画布尺寸：${output.width}×${output.height}（等距圆柱投影，经度 ${LON_MIN}~${LON_MAX}，纬度 ${LAT_MIN}~${LAT_MAX}）`);
   console.log(`  文件体积：${(size / 1024).toFixed(1)} KB`);
   console.log(`  数据来源：${usedSource}`);
@@ -577,6 +820,9 @@ if (require.main === module) {
 module.exports = {
   build,
   buildAdmin1,
+  landRingsFromTopology,
+  makeLandTest,
+  splitByLand,
   project,
   decodeArcs,
   ringFromArcIndexes,
