@@ -34,6 +34,7 @@ const LAN_FILE = path.join(__dirname, 'lan-topology-e2e.js');
 const AMAP_FILE = path.join(__dirname, 'amap-e2e.js');
 const COLOR_FILE = path.join(__dirname, 'node-color-check.js');
 const SWITCH_FILE = path.join(__dirname, 'map-switch-e2e.js');
+const STYLE_FILE = path.join(__dirname, 'style-consistency-e2e.js');
 
 const BASE = process.env.NS_BASE || 'http://127.0.0.1:8787';
 const SKIP_SMOKE = /^(1|true|yes|on)$/i.test(process.env.NS_SKIP_SMOKE || '');
@@ -148,7 +149,7 @@ function describeOutcome(item) {
 }
 
 (async () => {
-  const total = WITH_BROWSER ? 6 : 2;
+  const total = WITH_BROWSER ? 7 : 2;
   say('==================== NetScope 测试汇总 ====================');
   say(`Node: ${process.version}    项目: ${ROOT}`);
   say(`模式: ${WITH_BROWSER ? '含浏览器验收（局域网拓扑 + 高德底图）' : '仅单元测试 + 接口冒烟（NS_WITH_BROWSER=1 可开启浏览器验收）'}`);
@@ -209,6 +210,12 @@ function describeOutcome(item) {
         index: 6,
         file: SWITCH_FILE,
         name: '底图切换与跳数标签 (test/map-switch-e2e.js)',
+        args: [BASE],
+      },
+      {
+        index: 7,
+        file: STYLE_FILE,
+        name: '图例与样式一致性 (test/style-consistency-e2e.js)',
         args: [BASE],
       },
     ];
