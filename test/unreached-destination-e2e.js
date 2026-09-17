@@ -30,6 +30,10 @@ const TARGET = process.env.NS_UNREACHED_TARGET
   || process.argv.slice(2).find((a) => !/^https?:\/\//.test(a))
   || '111.55.78.24';
 
+/** 高德凭据（可选）：有则在末段追加"高德底图下也要有虚线"的回归检查 */
+const KEY = process.env.NS_AMAP_KEY || '';
+const SECURITY = process.env.NS_AMAP_SECURITY || '';
+
 const failures = [];
 function ok(label, cond, detail) {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '  → ' + detail : ''}`);
@@ -210,6 +214,80 @@ function getJSON(url, t = 5000) {
       ok('终点连线为虚线（表示未经探测确认）', f.dashedArcs >= 1, f.dashedArcs + ' 条虚线');
       ok('界面显示"未能确认到达"说明', f.noticeHidden === false && /未能确认到达/.test(f.noticeText),
         f.noticeText.slice(0, 80));
+
+      /* ---------- 高德底图必须同样显示虚线 ---------- */
+      //
+      // 曾经的缺陷：AmapView.setTrace 重建 context 时只透传 local/target/merge，
+      // 丢掉了 unreached / destinationGeo，于是高德底图上不生成
+      // isUnconfirmedDestination 节点，虚线画不出来（内置地图有、高德没有）。
+      if (KEY && SECURITY) {
+        console.log('\n--- 高德底图下的虚线（回归重点）---');
+        await evaluate(`window.NetScopeAmap.saveLocalCredentials({ key: ${JSON.stringify(KEY)}, security: ${JSON.stringify(SECURITY)}, enabled: true }); 'ok'`);
+        await evaluate("document.getElementById('opt-basemap').value = 'amap'; document.getElementById('opt-basemap').dispatchEvent(new Event('change')); 'switched'");
+        let amapReady = false;
+        for (let i = 0; i < 40; i += 1) {
+          await new Promise((rr) => setTimeout(rr, 1000));
+          const st = await evaluate("String(window.NetScopeApp.state.baseMap) + '|' + String(typeof window.AMap !== 'undefined')");
+          if (st === 'amap|true') { amapReady = true; break; }
+        }
+        ok('已切换到高德底图', amapReady);
+
+        if (amapReady) {
+          // 重新下发一次追踪数据，确保走的是高德分支
+          await evaluate(`(function () {
+            var app = window.NetScopeApp;
+            if (app.state.hops && app.state.hops.length) {
+              app.renderTraceToActiveView ? app.renderTraceToActiveView() : null;
+            }
+            return 'ok';
+          })()`);
+          await new Promise((rr) => setTimeout(rr, 2500));
+
+          const amapInfo = await evaluate(`JSON.stringify((function () {
+            var app = window.NetScopeApp;
+            var r = app.renderer();
+            var arcs = r.arcs || [];
+            var nodes = r.nodes || [];
+            var tn = nodes.filter(function (n) { return n.isTarget; });
+            return {
+              baseMap: app.state.baseMap,
+              plainMode: r.plain === true,
+              arcCount: arcs.length,
+              dashedArcs: arcs.filter(function (a) { return a.dashed; }).length,
+              targetCount: tn.length,
+              targetUnconfirmed: tn.length ? tn[0].isUnconfirmedDestination === true : null,
+              targetCity: tn.length ? tn[0].city : null
+            };
+          })())`);
+          const af = JSON.parse(amapInfo);
+          console.log('  ' + JSON.stringify(af));
+
+          ok('高德模式下渲染器处于叠加模式', af.plainMode === true);
+          ok('高德模式下存在未确认目标节点', af.targetUnconfirmed === true, JSON.stringify(af));
+          ok('高德模式下目标城市正确（Suqian）',
+            destGeo && destGeo.city ? af.targetCity === destGeo.city : true, String(af.targetCity));
+          ok('高德模式下终点连线为虚线 ★', af.dashedArcs >= 1, af.dashedArcs + ' 条虚线');
+
+          // 进一步验证"真的调用了 setLineDash"：包装 ctx.setLineDash 记录调用
+          const dashCalls = await evaluate(`(function () {
+            var r = window.NetScopeApp.renderer();
+            var ctx = r.ctx;
+            if (!ctx || !ctx.canvas) return 'no-ctx';
+            var orig = ctx.setLineDash;
+            var seen = [];
+            ctx.setLineDash = function (arr) { seen.push(JSON.stringify(arr)); return orig.apply(ctx, arguments); };
+            try { r.draw(); } catch (e) { /* ignore */ }
+            ctx.setLineDash = orig;
+            return JSON.stringify(seen);
+          })()`);
+          let calls = [];
+          try { calls = JSON.parse(dashCalls); } catch (_) { calls = []; }
+          const drewDash = calls.some((c) => c !== '[]');
+          ok('高德模式下确实以虚线绘制 ★', drewDash, String(dashCalls).slice(0, 120));
+        }
+      } else {
+        console.log('\nSKIP 未提供高德凭据（NS_AMAP_KEY / NS_AMAP_SECURITY），跳过高德虚线回归');
+      }
     } else {
       const tn = f.targetNodes[0] || {};
       ok('到达时目标节点不应标为"未确认"', tn.unconfirmed !== true);
