@@ -174,10 +174,40 @@ function detectBinary(buffer) {
 
   const files = listTrackedFiles();
   console.log(`\n待上传文件：${files.length} 个`);
+
+  // 清理远端已不再跟踪的文件（例如被重命名/删除的旧文件），保持仓库与工作区一致
+  const wanted = new Set(files);
+  const remoteTree = await api('GET', `/repos/${OWNER}/${REPO}/git/trees/${BRANCH}?recursive=1`).catch(() => null);
+  const stale = [];
+  if (remoteTree && Array.isArray(remoteTree.tree)) {
+    for (const entry of remoteTree.tree) {
+      if (entry.type !== 'blob') continue;
+      if (entry.path.startsWith('.github/')) continue; // 不动 CI 配置
+      if (!wanted.has(entry.path)) stale.push(entry.path);
+    }
+  }
+  if (stale.length) {
+    console.log(`远端有 ${stale.length} 个本地已删除的文件，将一并清理：`);
+    stale.forEach((s) => console.log('  - ' + s));
+  }
   if (DRY_RUN) {
     files.forEach((f) => console.log('  ' + f));
     console.log('\n--dry-run 结束');
     return;
+  }
+
+  for (const rel of stale) {
+    try {
+      const existing = await api('GET', `/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(rel)}?ref=${BRANCH}`);
+      await api('DELETE', `/repos/${OWNER}/${REPO}/contents/${encodeURIComponent(rel)}`, {
+        message: `chore: 删除已不再使用的文件 ${rel}\n\n${COMMIT_MESSAGE}`,
+        sha: existing.sha,
+        branch: BRANCH,
+      });
+      console.log(`  🗑  已删除 ${rel}`);
+    } catch (error) {
+      console.log(`  ✘ 删除 ${rel} 失败 → ${error.message}`);
+    }
   }
 
   let uploaded = 0;
