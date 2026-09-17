@@ -18,11 +18,13 @@ const requiredIds = [
   'field-scanrange', 'opt-scanports', 'opt-scanfrom', 'opt-scanto', 'opt-maxhops', 'opt-queries',
   'opt-timeout', 'opt-resolvenames', 'opt-engine', 'opt-color', 'opt-show-labels', 'opt-show-links',
   'opt-show-grid', 'opt-animate', 'opt-night', 'val-maxhops', 'val-queries', 'val-timeout',
-  'btn-zoom-in', 'btn-zoom-out', 'btn-reset-view', 'map-legend',
+  'btn-zoom-in', 'btn-zoom-out', 'btn-reset-view',
   // 高德地图与局域网扫描相关
   'opt-basemap', 'basemap-status', 'btn-lanscan', 'btn-settings', 'opt-deepscan',
   'settings-modal', 'settings-close', 'amap-key', 'amap-security', 'amap-enabled',
   'amap-save', 'amap-test', 'amap-clear', 'amap-test-result',
+  // 叠加层与图例
+  'amap-host', 'overlay-canvas', 'legend-panel', 'btn-legend', 'legend-close',
 ];
 
 let failures = 0;
@@ -47,7 +49,7 @@ for (const [name, open, close] of pairs) {
 
 // 脚本引用顺序必须满足依赖关系
 const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
-const expectedOrder = ['js/runtime-config.js', 'js/config.js', 'js/api.js', 'js/draw.js', 'js/amap-map.js', 'js/export.js', 'js/app.js'];
+const expectedOrder = ['js/runtime-config.js', 'js/config.js', 'js/api.js', 'js/draw.js', 'js/amap-overlay.js', 'js/export.js', 'js/app.js'];
 const orderOk = JSON.stringify(scripts) === JSON.stringify(expectedOrder);
 if (!orderOk) failures += 1;
 console.log(`${orderOk ? '✔' : '✘'} 脚本顺序: ${scripts.join(' → ')}`);
