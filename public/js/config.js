@@ -56,6 +56,8 @@
       ocean: 'rgba(9, 16, 30, 0.85)',
       land: '#16273f',
       landStroke: '#26456b',
+      /** 一级行政区（省/州/地区）边界：比国界更淡，放大后才渐显 */
+      admin1: 'rgba(120, 165, 220, 0.42)',
       graticule: 'rgba(56, 189, 248, 0.08)',
       route: '#38bdf8',
       routeSlow: '#f87171',
