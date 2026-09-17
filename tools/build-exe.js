@@ -75,11 +75,20 @@ function run(cmd, args, opts) {
     process.exit(1);
   }
 
-  // ---------- 1) 检查入口与随附资源 ----------
-  if (!fs.existsSync(ENTRY)) {
-    console.error('[错误] 缺少入口文件 ' + ENTRY);
-    process.exit(1);
+  // 输出目录里可能残留手工打过的压缩包等旧文件，会让"目录内容"清单失真，
+  // 这里顺手清掉（只删 exe/zip 类产物，不动 data/）
+  for (const name of fs.readdirSync(OUT_DIR)) {
+    if (/\.(zip|7z|rar)$/i.test(name)) {
+      try {
+        fs.rmSync(path.join(OUT_DIR, name), { force: true });
+        log('→ 已清理陈旧压缩包：' + name);
+      } catch (_) {
+        /* 删不掉不影响构建 */
+      }
+    }
   }
+
+  // ---------- 1) 检查入口与随附资源 ----------
   const publicDir = path.join(ROOT, 'public');
   if (!fs.existsSync(path.join(publicDir, 'index.html'))) {
     console.error('[错误] 缺少前端资源 ' + publicDir);
