@@ -204,11 +204,25 @@ function getJSON(url, t = 8000) {
   if (KEY && SECURITY) {
     console.log('\n================ 场景 3：高德底图 ⇄ 逻辑拓扑 ================');
     await evaluate(`window.NetScopeAmap.saveLocalCredentials({ key: ${JSON.stringify(KEY)}, security: ${JSON.stringify(SECURITY)}, enabled: true }); 'ok'`);
+    // 刻意在「逻辑拓扑」视图下切底图：此时应保持逻辑拓扑（画面与按钮一致），
+    // 高德被临时挂起，数据仍由内置渲染器画在内置画布上
     await evaluate("document.getElementById('opt-basemap').value = 'amap'; document.getElementById('opt-basemap').dispatchEvent(new Event('change')); 'ok'");
     for (let i = 0; i < 40; i += 1) {
       await new Promise((r) => setTimeout(r, 1000));
       if ((await evaluate('window.NetScopeApp.state.baseMap')) === 'amap') break;
     }
+    await new Promise((r) => setTimeout(r, 2500));
+    const sAmapKeep = JSON.parse(await evaluate(snapshot));
+    check('逻辑拓扑下切到高德（视图必须保持逻辑拓扑）', sAmapKeep, {
+      mode: 'graph', lanMode: false, expectArcs: true, minLabels: 3, minInk: 10,
+    });
+    if (sAmapKeep.baseMap !== 'amap') failures.push('场景3：底图选择应为高德');
+    if (sAmapKeep.nodes < s1.nodes) {
+      failures.push(`场景3：切底图后逻辑拓扑节点变少（${s1.nodes} → ${sAmapKeep.nodes}）`);
+    }
+
+    // 再显式切到世界地图，此时高德才真正接管（画在叠加层）
+    await evaluate("document.querySelector('[data-view=\\\"map\\\"]').click(); 'ok'");
     await new Promise((r) => setTimeout(r, 2500));
     const sAmap = JSON.parse(await evaluate(snapshot));
     check('高德 + 世界地图', sAmap, { mode: 'map', minInk: 10 });
