@@ -21,7 +21,7 @@ const { spawn, spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 const EXE = path.join(ROOT, 'dist', 'netscope.exe');
-const APK = path.join(ROOT, 'dist', 'android', 'netscope-1.0.0.apk');
+const APK = path.join(ROOT, 'dist', 'android', 'netscope-1.1.0.apk');
 const PORT = 8911;
 
 const failures = [];
@@ -165,6 +165,13 @@ function request(port, urlPath, timeoutMs) {
     ok('APK 含 AndroidManifest.xml', has('AndroidManifest.xml'));
     ok('APK 含 classes.dex', has('classes.dex'));
     ok('APK 含 resources.arsc', has('resources.arsc'));
+    // 独立运行版的关键：前端资源必须打进 APK（assets/web/），否则 WebView 没有界面
+    const assetEntries = entries.filter((e) => /assets[\\/]web[\\/]/.test(e));
+    ok('APK 内含前端资源 assets/web/', assetEntries.length > 0, assetEntries.length + ' 项');
+    ok('APK 内含 assets/web/index.html',
+      entries.some((e) => /assets[\\/]web[\\/]index\.html$/.test(e)));
+    ok('APK 内含地图数据',
+      entries.some((e) => /assets[\\/]web[\\/]data[\\/]world-110m\.json$/.test(e)));
     ok('APK 已签名（META-INF 签名文件）', entries.some((e) => /^META-INF\/.*\.(RSA|DSA|EC)$/i.test(e)),
       entries.filter((e) => e.startsWith('META-INF/')).join(', ') || '无');
 
@@ -237,16 +244,19 @@ function request(port, urlPath, timeoutMs) {
               const raw = buf.subarray(start, start + compSize);
               const data = method === 8 ? zlib.inflateRawSync(raw) : raw;
               const dexText = data.toString('latin1');
-              found = dexText.includes('MainActivity') && dexText.includes('SettingsActivity');
+              found = dexText.includes('MainActivity')
+                      && dexText.includes('NetHttpd')
+                      && dexText.includes('NetApi')
+                      && dexText.includes('Probe');
               break;
             }
             o += 46 + nameLen + extraLen + commentLen;
           }
         }
-        ok('classes.dex 含 MainActivity 与 SettingsActivity', found);
+        ok('classes.dex 含独立后端与界面类（MainActivity/NetHttpd/NetApi/Probe）', found);
         void nameOffset;
       } catch (error) {
-        ok('classes.dex 含 MainActivity 与 SettingsActivity', false, error.message);
+        ok('classes.dex 含独立后端与界面类（MainActivity/NetHttpd/NetApi/Probe）', false, error.message);
       }
     }
   }
