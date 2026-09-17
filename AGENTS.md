@@ -13,11 +13,13 @@ node test/run-tests.js --list                    # 查看全部可用名称
 node test/run-tests.js --all                     # 全量（仅用户明确要求时）
 ```
 
-- 全量 20 项约 6 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
+- 全量 22 项约 7 分钟；增量通常 3～60 秒。改动后按"受影响的模块"挑用例，
   例如：改了 `draw.js` 的着色 → `color`；改了底图/视图逻辑 →
   `viewswitch,keepview,lanlock,amaptobuiltin,matrix`；改了地图数据/渲染 → `mapstyle`；
   改了地图数据加载/服务端静态资源 → `cache,smoke`；
-  改了打包或 Android 代码 → `bundle,android`。
+  改了打包或 Android 代码 → `bundle,android`；
+  改了高德凭据或底图设置持久化 → `amappersist,deskpersist,matrix`；
+  改了 runtime-config 或静态资源服务 → `bundle,cache,smoke`。
   **改动涉及"视图/底图/模式"状态机时，务必跑 `matrix`** —— 单一场景测试
   容易漏掉状态残留类缺陷。
 - 单个测试文件也可以直接 `node test/xxx-e2e.js`。
@@ -26,7 +28,7 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 
 | 名称 | 说明 | 需浏览器 |
 | --- | --- | --- |
-| `unit` | 单元测试（101 用例） | 否 |
+| `unit` | 单元测试（106 用例） | 否 |
 | `smoke` | 接口冒烟（12 项，会真实访问网络） | 否 |
 | `cache` | 世界地图数据缓存行为（ETag / 304 / 前端不再 force-cache） | 否 |
 | `lan` | 局域网拓扑验收（真实扫描） | 是 |
@@ -44,10 +46,12 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
 | `lanlock` | 局域网锁定世界地图 | 是 |
 | `amaptobuiltin` | 高德逻辑拓扑切回内置地图（含底图初始化竞态） | 是 |
 | `matrix` | 视图×底图全组合矩阵（21 条路径，状态残留类缺陷的兜底） | 是 |
-| `bundle` | 打包产物验收（启动 exe + 校验 APK，需先构建） | 否 |
+| `bundle` | 打包产物验收（启动 exe + 校验 APK + runtime-config 回归） | 否 |
 | `android` | 手机端后端桌面验证（纯 Java，脱离 Android 运行） | 否 |
+| `amappersist` | 高德 Key 持久化（新窗口无本地缓存） | 是 |
+| `deskpersist` | 桌面版设置持久化（跨重启保留，需已构建 exe） | 是 |
 
-分组：`core`（unit, smoke, cache）、`pack`（打包产物）、`map`（全部地图/底图/拓扑类）。
+分组：`core`（unit, smoke, cache）、`pack`（打包产物 + deskpersist）、`map`（全部地图/底图/拓扑类）。
 
 ## 服务与调试
 
@@ -93,6 +97,25 @@ node test/run-tests.js --all                     # 全量（仅用户明确要�
   引擎只给出目标、RTT 与由回弹 TTL 推算的跳数距离，并在 notes 里说明原因。
 - 桌面 exe 的窗口行为：用浏览器 `--app` 模式打开独立窗口，**关窗即退出进程**；
   改 `src/sea-entry.js` 的窗口逻辑后要实测"关窗即停"。
+
+## 桌面端设置持久化（两个易踩的坑）
+
+1. **应用窗口必须用稳定 profile 目录**（`%LOCALAPPDATA%\NetScope\browser-profile`）。
+   浏览器按"来源 + profile 目录"隔离 localStorage；若每次启动都用
+   `netscope-window-<pid>` 这类临时目录，用户的设置与高德 Key 每次都丢，
+   表现为"设置不能被缓存"。**不要**在退出时删除该目录。
+   > 测试持久化时，浏览器必须**优雅退出**（CDP `Browser.close`）才会把
+   > localStorage 刷盘；强杀进程会丢数据，导致假阴性。
+
+2. **`public/js/runtime-config.js` 是生成物，绝不能当静态文件读**。
+   它若落盘就会被打进 `dist/public/` 并把端口写死，换端口启动后整个界面
+   连不上后端；开发机上残留的旧文件也会覆盖当前地址。
+   现在的做法：`serveStatic()` 里直接拦截该路径，按请求的 Host 头即时生成，
+   并带 `no-store` 禁缓存。**任何情况下都不要把它写回 `public/`。**
+
+3. 前端凭据解析要**双来源**：先读 localStorage，缺失时回落到服务端
+   `data/amap-config.json`（`GET /api/amap/config?includePlain=1`，仅回环可用）。
+   只看 localStorage 会在 exe 新窗口场景误报"未配置 Key"。
 
 ## 代码约定
 
