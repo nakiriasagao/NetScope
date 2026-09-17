@@ -227,6 +227,7 @@
       optShowLinks: $('opt-show-links'),
       optShowGrid: $('opt-show-grid'),
       optShowAdmin1: $('opt-show-admin1'),
+      btnReloadMap: $('btn-reload-map'),
       optAnimate: $('opt-animate'),
       optNight: $('opt-night'),
     };
@@ -252,17 +253,65 @@
     });
   }
 
-  async function loadWorld() {
+  /**
+   * 世界地图数据的本地缓存键（存放上一次拿到的 generatedAt）
+   *
+   * 为什么需要它：地图数据是构建产物，重新构建后内容会变。
+   * 早期实现用了 fetch(..., { cache: 'force-cache' })，会**强制使用浏览器缓存、
+   * 忽略任何重新验证**，于是重新构建地图后用户仍看到旧样式。
+   * 现在改为：
+   *   1. 带版本号请求（版本取上一次响应的 generatedAt），新构建即新 URL，必然重新下载；
+   *   2. 首次或版本未知时用 no-cache 拿最新数据，再记下版本。
+   */
+  var WORLD_CACHE_KEY = 'netscope.worldmap.build';
+
+  function readWorldBuild() {
     try {
-      var res = await fetch('data/world-110m.json', { cache: 'force-cache' });
+      return window.localStorage.getItem(WORLD_CACHE_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function writeWorldBuild(build) {
+    try {
+      if (build) window.localStorage.setItem(WORLD_CACHE_KEY, build);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  async function loadWorld(forceFresh) {
+    try {
+      var knownBuild = readWorldBuild();
+      var url = 'data/world-110m.json';
+      if (knownBuild && !forceFresh) url += '?v=' + encodeURIComponent(knownBuild);
+      // no-cache：每次都向服务端确认（配合服务端 ETag 走 304，代价很小）
+      var res = await fetch(url, { cache: forceFresh ? 'reload' : 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var world = await res.json();
+      // 记录本次构建时间戳，下次用它做版本号；变了就说明地图重新构建过
+      var build = world.generatedAt || '';
+      var changed = Boolean(knownBuild && build && knownBuild !== build);
+      writeWorldBuild(build);
       renderer.setWorld(world);
       renderer.resize();
       renderer.fitToContainer();
+      if (changed && !forceFresh) {
+        toast('世界地图数据已更新到 ' + escapeHtml(build.slice(0, 19).replace('T', ' ')) + ' 的构建版本', 'ok', 7000);
+      }
     } catch (error) {
       toast('世界地图数据加载失败：' + escapeHtml(error.message) + '<br/>请确认 public/data/world-110m.json 存在（可用 npm run build:map 重新生成）', 'error', 12000);
     }
+  }
+
+  /**
+   * 强制重新下载世界地图数据（绕过一切缓存）
+   * 供「显示选项」里的按钮与调试使用。
+   */
+  async function reloadWorldData() {
+    await loadWorld(true);
+    toast('已重新下载世界地图数据', 'ok', 5000);
   }
 
   async function checkHealth() {
@@ -1007,6 +1056,13 @@
         renderer.setOptions(options);
       });
     });
+
+    // 强制重新下载世界地图数据（绕过浏览器缓存）
+    if (el.btnReloadMap) {
+      el.btnReloadMap.addEventListener('click', function () {
+        reloadWorldData();
+      });
+    }
 
     document.querySelectorAll('.tab').forEach(function (tab) {
       tab.addEventListener('click', function () {
@@ -2269,5 +2325,7 @@
     diagnose: runDiagnose,
     refreshStats: updateStats,
     renderHopsTable: renderHopsTable,
+    /** 强制重新下载世界地图数据（绕过浏览器缓存） */
+    reloadWorldData: reloadWorldData,
   };
 })();
