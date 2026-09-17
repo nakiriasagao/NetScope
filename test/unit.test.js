@@ -26,6 +26,7 @@ const { decodeBest, scoreText, supportsEncoding } = require('../src/core/exec');
 const sysinfo = require('../src/core/sysinfo');
 const geo = require('../src/core/geo');
 const reachability = require('../src/core/reachability');
+const amap = require('../src/core/amap');
 const routes = require('../src/api/routes');
 
 const { parseTraceroute, parsePing } = parsers;
@@ -1239,5 +1240,51 @@ describe('边界回归位', () => {
     ));
     assert.strictEqual(r.resolvedIP, '8.8.8.8');
     assert.strictEqual(r.avg, 10, '时延本身仍可正常解析');
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 高德配置明文回传的门禁（GET /api/amap/config）                        */
+/* ------------------------------------------------------------------ */
+
+describe('amapConfig 明文回传门禁', () => {
+  const mockReq = (url, remoteAddress) => ({ url, headers: {}, socket: { remoteAddress } });
+
+  it('默认请求不回传明文密钥', async () => {
+    const res = await routes.amapConfig(mockReq('/api/amap/config', '127.0.0.1'));
+    assert.ok(res.ok);
+    assert.ok(!('keyPlain' in res.config), '默认不应包含 keyPlain');
+    assert.ok(!('securityPlain' in res.config), '默认不应包含 securityPlain');
+  });
+
+  it('带 includePlain=1 但来自非回环地址时仍不回传明文', async () => {
+    const res = await routes.amapConfig(mockReq('/api/amap/config?includePlain=1', '192.168.1.50'));
+    assert.ok(!('keyPlain' in res.config), '局域网来源不得拿到明文');
+    assert.ok(!('securityPlain' in res.config));
+  });
+
+  it('带 includePlain=1 且来自回环地址时才回传明文（供 exe 新窗口回填）', async () => {
+    const res = await routes.amapConfig(mockReq('/api/amap/config?includePlain=1', '127.0.0.1'));
+    const stored = amap.loadStoredConfig();
+    if (!stored.key) {
+      // 本机未配置过高德 Key 时，只断言"不会凭空造出明文"
+      assert.ok(!res.config.keyPlain, '未配置时不应有明文');
+      return;
+    }
+    assert.strictEqual(res.config.keyPlain, stored.key);
+    assert.strictEqual(res.config.securityPlain, stored.security || '');
+  });
+
+  it('IPv6 回环地址 ::1 同样放行', async () => {
+    const res = await routes.amapConfig(mockReq('/api/amap/config?includePlain=1', '::1'));
+    const stored = amap.loadStoredConfig();
+    if (stored.key) assert.strictEqual(res.config.keyPlain, stored.key);
+    else assert.ok(!res.config.keyPlain);
+  });
+
+  it('掩码状态始终保留（前端展示用）', async () => {
+    const res = await routes.amapConfig(mockReq('/api/amap/config?includePlain=1', '127.0.0.1'));
+    assert.ok('configured' in res.config);
+    assert.ok('keyMasked' in res.config);
   });
 });
