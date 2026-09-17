@@ -15,6 +15,8 @@ const sysinfo = require('../core/sysinfo');
 const reachability = require('../core/reachability');
 const dnsTool = require('../core/dns');
 const orchestrator = require('../core/orchestrator');
+const lanscan = require('../core/lanscan');
+const amap = require('../core/amap');
 const { parseTarget, classifyIP, isIP } = require('../core/iputils');
 const { captureCapability } = require('../core/exec');
 const { createTask, finishTask, cancelTask, getTask, runningCount, listTasks } = require('../tasks');
@@ -22,6 +24,7 @@ const { sendJSON, sendError, readBody, openSSE, parseQuery, parseIntParam, boolP
 
 const MAX_CONCURRENT_TRACES = 4;
 const MAX_CONCURRENT_SCANS = 2;
+const MAX_CONCURRENT_LANSCANS = 1;
 
 /* ------------------------------------------------------------------ */
 /* 健康检查与自检                                                      */
@@ -724,6 +727,241 @@ async function diagnoseStream(req, res) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 局域网设备扫描（本地网络拓扑）                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /api/lanscan —— 扫描局域网设备，返回可直接绘制星型拓扑图的结构
+ * body: { deep, maxHosts, concurrency, timeoutMs, includeSsdp, includeMdns }
+ */
+async function lanScan(body) {
+  if (runningCount('lanscan') >= MAX_CONCURRENT_LANSCANS) {
+    throw Object.assign(new Error('已有局域网扫描在进行中，请稍后再试'), { statusCode: 429 });
+  }
+  const deep = body.deep !== false;
+  const task = createTask('lanscan', { deep });
+  try {
+    const result = await lanscan.scanLan({
+      deep,
+      maxHosts: Math.min(Number(body.maxHosts) || 512, 4096),
+      concurrency: Math.min(Number(body.concurrency) || 64, 256),
+      timeoutMs: Math.min(Number(body.timeoutMs) || 800, 5000),
+      includeSsdp: body.includeSsdp !== false,
+      includeMdns: body.includeMdns !== false,
+      ssdpTimeoutMs: Number(body.ssdpTimeoutMs) || 2500,
+      mdnsTimeoutMs: Number(body.mdnsTimeoutMs) || 2000,
+      signal: task.signal,
+    });
+
+    // 公网出口：优先用高德 IP 定位（国内精度更好），失败再用原有地理库
+    const egress = await sysinfo.detectPublicIP({ timeoutMs: 5000 }).catch(() => ({ ip: null }));
+    let egressLocation = null;
+    let egressProvider = null;
+    if (egress && egress.ip) {
+      const amapResult = await amap.locateIp(null, egress.ip).catch(() => null);
+      if (amapResult && amapResult.ok && amapResult.result) {
+        egressLocation = amapResult.result;
+        egressProvider = 'amap';
+      } else {
+        const fallback = await geo.resolveIP(egress.ip).catch(() => null);
+        if (fallback && typeof fallback.lat === 'number') {
+          egressLocation = { lat: fallback.lat, lon: fallback.lon, city: fallback.city, province: fallback.region, provider: fallback.provider };
+          egressProvider = fallback.provider;
+        }
+      }
+    }
+
+    const payload = {
+      ok: true,
+      taskId: task.id,
+      lan: result,
+      egress: {
+        ip: egress ? egress.ip : null,
+        provider: egressProvider,
+        location: egressLocation,
+        amapConfigured: amap.configStatus(null).configured,
+      },
+      topology: buildLanTopology(result, body.hostname),
+    };
+    finishTask(task, { result: payload });
+    return payload;
+  } catch (error) {
+    finishTask(task, { error });
+    throw error;
+  }
+}
+
+/**
+ * 把扫描结果整理成"以网关为中心的星型拓扑"结构，供前端直接绘制
+ * @param {object} scan scanLan 的结果
+ * @param {string} [hostnameHint] 前端传来的本机主机名（更准确，减少一次反解）
+ */
+function buildLanTopology(scan, hostnameHint) {
+  const gatewayIP = scan.gateway;
+  const selfList = scan.self || [];
+  const primarySelf = selfList[0] || null;
+  const localHostname = hostnameHint || require('os').hostname();
+
+  const nodes = [];
+  const links = [];
+
+  // 中心：网关
+  if (gatewayIP) {
+    const gatewayDevice = (scan.devices || []).find((d) => d.ip === gatewayIP);
+    nodes.push({
+      id: 'gw:' + gatewayIP,
+      role: 'gateway',
+      ip: gatewayIP,
+      mac: gatewayDevice ? gatewayDevice.mac : null,
+      vendor: gatewayDevice ? gatewayDevice.vendor : null,
+      hostname: (gatewayDevice && gatewayDevice.hostname) || '默认网关',
+      label: (gatewayDevice && gatewayDevice.hostname) || '网关 / 路由器',
+      type: 'gateway',
+      typeLabel: '网关/路由器',
+    });
+  }
+
+  // 本机
+  if (primarySelf) {
+    nodes.push({
+      id: 'self:' + primarySelf.ip,
+      role: 'self',
+      ip: primarySelf.ip,
+      mac: primarySelf.mac,
+      vendor: lanscan.lookupVendor(primarySelf.mac),
+      hostname: localHostname,
+      label: localHostname,
+      iface: primarySelf.name,
+      type: 'self',
+      typeLabel: '本机',
+    });
+    if (gatewayIP) links.push({ from: 'self:' + primarySelf.ip, to: 'gw:' + gatewayIP, kind: 'uplink' });
+  } else if (gatewayIP) {
+    nodes.push({
+      id: 'self:unknown',
+      role: 'self',
+      ip: null,
+      mac: null,
+      hostname: localHostname,
+      label: localHostname + '（未取到局域网地址）',
+      type: 'self',
+      typeLabel: '本机',
+    });
+  }
+
+  nodes.push({
+    id: 'internet',
+    role: 'internet',
+    ip: null,
+    mac: null,
+    hostname: 'Internet',
+    label: '互联网',
+    type: 'internet',
+    typeLabel: '互联网',
+  });
+  if (gatewayIP) links.push({ from: 'gw:' + gatewayIP, to: 'internet', kind: 'wan' });
+
+  // 其它邻居设备
+  const selfIPSet = new Set(selfList.map((s) => s.ip));
+  for (const device of scan.devices || []) {
+    if (device.ip === gatewayIP) continue;
+    // 同一台机器可能有多个地址（多网卡 / 旧租约），这些都应标为本机
+    const isSelfAddress = selfIPSet.has(device.ip);
+    nodes.push({
+      id: 'dev:' + device.ip,
+      role: 'device',
+      ip: device.ip,
+      mac: device.mac,
+      vendor: device.vendor,
+      vendorLocal: device.vendorLocal,
+      vendorPrefix: device.vendorPrefix,
+      hostname: device.hostname,
+      label: isSelfAddress ? (localHostname + '（本机）') : (device.hostname || device.vendor || device.ip),
+      type: isSelfAddress ? 'self' : device.type,
+      typeLabel: isSelfAddress ? '本机' : device.typeLabel,
+      isSelfAddress,
+      ssdp: device.ssdp || null,
+      mdns: device.mdns || null,
+      arpType: device.arpType,
+    });
+    if (gatewayIP) {
+      links.push({ from: 'dev:' + device.ip, to: 'gw:' + gatewayIP, kind: 'lan' });
+    } else if (primarySelf) {
+      links.push({ from: 'dev:' + device.ip, to: 'self:' + primarySelf.ip, kind: 'lan' });
+    }
+  }
+
+  return {
+    center: gatewayIP ? 'gw:' + gatewayIP : (primarySelf ? 'self:' + primarySelf.ip : null),
+    subnet: scan.subnet,
+    nodes,
+    links,
+    deviceCount: (scan.devices || []).length,
+    byType: (scan.devices || []).reduce((acc, d) => {
+      acc[d.type] = (acc[d.type] || 0) + 1;
+      return acc;
+    }, {}),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 高德地图配置与代理                                                  */
+/* ------------------------------------------------------------------ */
+
+/** GET /api/amap/config —— 当前配置状态（密钥掩码） */
+async function amapConfig(req) {
+  return { ok: true, config: amap.configStatus(req), hints: amap.AMAP_SETUP_HINTS };
+}
+
+/** POST /api/amap/config —— 保存密钥（供设置面板使用，默认只写本地文件） */
+async function amapSaveConfig(req) {
+  const body = await readBody(req);
+  const key = String(body.key || '').trim();
+  const security = String(body.security || '').trim();
+  if (key && !amap.looksLikeKey(key)) {
+    throw Object.assign(new Error('Key 格式不正确：高德 Key 通常是 32 位十六进制字符'), { statusCode: 400 });
+  }
+  if (security && !amap.looksLikeKey(security)) {
+    throw Object.assign(new Error('安全密钥格式不正确：应为 32 位十六进制字符'), { statusCode: 400 });
+  }
+  const saved = amap.saveStoredConfig({
+    key,
+    security,
+    enabled: body.enabled === undefined ? true : Boolean(body.enabled),
+  });
+  return {
+    ok: true,
+    saved: { keyMasked: saved.key ? `${saved.key.slice(0, 6)}…${saved.key.slice(-4)}` : null, hasSecurity: Boolean(saved.security), enabled: saved.enabled, savedAt: saved.savedAt },
+    configFile: amap.AMAP_CONFIG_FILE,
+  };
+}
+
+/** POST /api/amap/test —— 连通性测试（可用临时密钥，不落盘） */
+async function amapTest(req) {
+  const body = await readBody(req).catch(() => ({}));
+  if (body && (body.key || body.security)) {
+    // 临时密钥：通过请求头传给统一解析逻辑
+    req.headers['x-amap-key'] = String(body.key || '');
+    req.headers['x-amap-security'] = String(body.security || '');
+  }
+  return amap.testConnection(req);
+}
+
+/** POST /api/amap/ip —— IP 定位 */
+async function amapIp(req) {
+  const body = await readBody(req);
+  return amap.locateIp(req, body.ip);
+}
+
+/** POST /api/amap/regeo —— 逆地理编码 */
+async function amapRegeo(req) {
+  const body = await readBody(req);
+  const lon = Number(body.lon);
+  const lat = Number(body.lat);
+  return amap.reverseGeocode(req, lon, lat);
+}
+
+/* ------------------------------------------------------------------ */
 /* 路由表                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -732,6 +970,12 @@ const routes = [
   { method: 'GET', path: '/api/selftest', handler: async () => selfTest() },
   { method: 'GET', path: '/api/tasks', handler: async () => ({ ok: true, tasks: listTasks() }) },
   { method: 'GET', path: '/api/result', handler: async (req) => taskResult(parseQuery(req.url)) },
+  { method: 'GET', path: '/api/amap/config', handler: async (req) => amapConfig(req) },
+  { method: 'POST', path: '/api/amap/config', handler: async (req) => amapSaveConfig(req) },
+  { method: 'POST', path: '/api/amap/test', handler: async (req) => amapTest(req) },
+  { method: 'POST', path: '/api/amap/ip', handler: async (req) => amapIp(req) },
+  { method: 'POST', path: '/api/amap/regeo', handler: async (req) => amapRegeo(req) },
+  { method: 'POST', path: '/api/lanscan', handler: async (req) => lanScan(await readBody(req)) },
 
   { method: 'POST', path: '/api/analyze', handler: async (req, res, ctx) => analyze(await readBody(req)) },
   { method: 'POST', path: '/api/probe', handler: async (req) => probe(await readBody(req)) },
