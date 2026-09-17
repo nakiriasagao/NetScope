@@ -36,6 +36,7 @@ const COLOR_FILE = path.join(__dirname, 'node-color-check.js');
 const SWITCH_FILE = path.join(__dirname, 'map-switch-e2e.js');
 const STYLE_FILE = path.join(__dirname, 'style-consistency-e2e.js');
 const LAN_TRACE_FILE = path.join(__dirname, 'lan-then-trace-e2e.js');
+const VIEW_SWITCH_FILE = path.join(__dirname, 'view-switch-basemap-e2e.js');
 
 const BASE = process.env.NS_BASE || 'http://127.0.0.1:8787';
 const SKIP_SMOKE = /^(1|true|yes|on)$/i.test(process.env.NS_SKIP_SMOKE || '');
@@ -150,7 +151,7 @@ function describeOutcome(item) {
 }
 
 (async () => {
-  const total = WITH_BROWSER ? 8 : 2;
+  const total = WITH_BROWSER ? 9 : 2;
   say('==================== NetScope 测试汇总 ====================');
   say(`Node: ${process.version}    项目: ${ROOT}`);
   say(`模式: ${WITH_BROWSER ? '含浏览器验收（局域网拓扑 + 高德底图）' : '仅单元测试 + 接口冒烟（NS_WITH_BROWSER=1 可开启浏览器验收）'}`);
@@ -223,6 +224,12 @@ function describeOutcome(item) {
         index: 8,
         file: LAN_TRACE_FILE,
         name: '局域网扫描后再探测 (test/lan-then-trace-e2e.js)',
+        args: [BASE],
+      },
+      {
+        index: 9,
+        file: VIEW_SWITCH_FILE,
+        name: '视图切换与底图保持 (test/view-switch-basemap-e2e.js)',
         args: [BASE],
       },
     ];
