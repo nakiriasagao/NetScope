@@ -32,6 +32,8 @@ const UNIT_FILE = path.join(__dirname, 'unit.test.js');
 const SMOKE_FILE = path.join(__dirname, 'smoke-api.js');
 const LAN_FILE = path.join(__dirname, 'lan-topology-e2e.js');
 const AMAP_FILE = path.join(__dirname, 'amap-e2e.js');
+const COLOR_FILE = path.join(__dirname, 'node-color-check.js');
+const SWITCH_FILE = path.join(__dirname, 'map-switch-e2e.js');
 
 const BASE = process.env.NS_BASE || 'http://127.0.0.1:8787';
 const SKIP_SMOKE = /^(1|true|yes|on)$/i.test(process.env.NS_SKIP_SMOKE || '');
@@ -146,7 +148,7 @@ function describeOutcome(item) {
 }
 
 (async () => {
-  const total = WITH_BROWSER ? 4 : 2;
+  const total = WITH_BROWSER ? 6 : 2;
   say('==================== NetScope 测试汇总 ====================');
   say(`Node: ${process.version}    项目: ${ROOT}`);
   say(`模式: ${WITH_BROWSER ? '含浏览器验收（局域网拓扑 + 高德底图）' : '仅单元测试 + 接口冒烟（NS_WITH_BROWSER=1 可开启浏览器验收）'}`);
@@ -196,11 +198,18 @@ function describeOutcome(item) {
   if (WITH_BROWSER) {
     const browserCases = [
       { index: 3, file: LAN_FILE, name: '局域网拓扑验收 (test/lan-topology-e2e.js)', args: [BASE] },
+      { index: 4, file: COLOR_FILE, name: '节点着色规则 (test/node-color-check.js)', args: [BASE] },
       {
-        index: 4,
+        index: 5,
         file: AMAP_FILE,
         name: '高德底图验收 (test/amap-e2e.js)',
         args: [process.env.NS_AMAP_KEY || '', process.env.NS_AMAP_SECURITY || '', BASE],
+      },
+      {
+        index: 6,
+        file: SWITCH_FILE,
+        name: '底图切换与跳数标签 (test/map-switch-e2e.js)',
+        args: [BASE],
       },
     ];
     for (const item of browserCases) {
