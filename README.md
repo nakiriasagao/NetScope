@@ -168,7 +168,7 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 | 左侧 · 探测参数 | 最大跳数、每跳探测次数、单跳超时、反向解析开关、追踪引擎选择 |
 | 左侧 · 本机网络拓扑 | 扫描局域网设备 / 仅读本机信息 / 出口信息 / ⚙ 地图设置 |
 | 左侧 · 端口扫描 | 常用端口 / 自定义列表 / 端口区间三种模式 |
-| 左侧 · 显示选项 | 标签、连线、经纬网格、**国家内地区划分**、数据包动画、昼夜分界、连线着色方式 |
+| 左侧 · 显示选项 | 标签、连线、经纬网格、数据包动画、昼夜分界、连线着色方式 |
 | 中间地图 | **世界地图视图**（地理拓扑）与**逻辑拓扑视图**（力导向链路图）一键切换 |
 | 底图选择器 | 内置世界地图 / 高德地图（配置 Key 后可用，二者拓扑样式完全一致） |
 | 右侧面板 | 路由跳点表、连通性、端口、本机网络、DNS、安全证书六个标签页 |
@@ -177,9 +177,8 @@ node bin/netscope.js --dns example.com            # DNS 诊断
 > 画到世界地图上没有意义。因此扫描后会自动切到逻辑拓扑并禁用「世界地图」按钮，
 > 直到你**下一次探测外网**才恢复。
 
-> **内置世界地图的层级**：全球视图只显示国界；放大到 1.4 倍以上会渐显
-> 国家内部的省 / 州 / 地区边界（Natural Earth 1:50m admin-1 数据），
-> 可在「显示选项」中关闭「显示国家内地区划分」。
+> **内置世界地图的样式**：按**国家/地区**划分（176 个国家/地区，国界 + 国土填色），
+> 全球视图即是完整可读的样式。地图数据本地打包（约 121 KB），不依赖任何 CDN。
 
 > **关于逻辑拓扑与高德底图**：高德是*地理*底图，而逻辑拓扑表达的是*链路关系*（与地理位置无关），
 > 两者语义不兼容。因此切到逻辑拓扑时会**临时挂起**高德、改用内置引擎绘制，
@@ -407,7 +406,7 @@ NetScope/
 
 ```powershell
 # 推荐：增量测试（只跑与本次改动相关的，几秒到几十秒）
-node test/run-tests.js --only=unit,admin1,lan
+node test/run-tests.js --only=unit,mapstyle,lan
 node test/run-tests.js --list     # 列出全部可用测试名
 node test/run-tests.js --all      # 全量（发布前）
 
@@ -431,7 +430,8 @@ node test/amap-graph-e2e.js        # 高德底图下的逻辑拓扑
 node test/basemap-keep-view-e2e.js # 切换底图时保持当前视图
 node test/lan-lock-view-e2e.js     # 扫描局域网后锁定世界地图
 node test/map-cache-e2e.js         # 世界地图数据缓存行为
-node test/admin1-map-e2e.js        # 世界地图的国家内地区划分
+node test/map-style-e2e.js         # 世界地图默认样式（按国家划分）
+node test/amap-graph-to-builtin-e2e.js # 高德逻辑拓扑切回内置地图
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
