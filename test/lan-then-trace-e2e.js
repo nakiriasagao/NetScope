@@ -171,9 +171,23 @@ function getJSON(url, t = 8000) {
       if ((await evaluate('window.NetScopeApp.state.baseMap')) === 'amap') break;
     }
     await new Promise((r) => setTimeout(r, 2000));
+    const sAmapKeep = JSON.parse(await evaluate(probeState));
+    report('高德模式（当前视图为逻辑拓扑，高德应被挂起）', sAmapKeep);
+    // 局域网扫描后视图是"逻辑拓扑"，此时切高德必须挂起高德、保持逻辑拓扑
+    if (sAmapKeep.plain) failures.push('步骤3：逻辑拓扑视图下切高德不应启用叠加绘制（应挂起）');
+    if (sAmapKeep.rendererCanvasId !== 'map-canvas') {
+      failures.push(`步骤3：逻辑拓扑视图下应画在内置画布，实际 ${sAmapKeep.rendererCanvasId}`);
+    }
+
+    // 显式切到世界地图：此时高德才真正接管
+    await evaluate("document.querySelector('[data-view=\\\"map\\\"]').click(); 'ok'");
+    await new Promise((r) => setTimeout(r, 2500));
     const sAmap = JSON.parse(await evaluate(probeState));
-    report('高德模式', sAmap);
-    if (!sAmap.plain) failures.push('步骤3：高德模式未启用叠加绘制');
+    report('切到世界地图后的高德模式', sAmap);
+    if (!sAmap.plain) failures.push('步骤3：世界地图视图下高德未启用叠加绘制');
+    if (sAmap.rendererCanvasId !== 'overlay-canvas') {
+      failures.push(`步骤3：世界地图下高德应画在叠加层，实际 ${sAmap.rendererCanvasId}`);
+    }
 
     await evaluate("document.getElementById('opt-basemap').value = 'builtin'; document.getElementById('opt-basemap').dispatchEvent(new Event('change')); 'ok'");
     await new Promise((r) => setTimeout(r, 2500));
@@ -185,6 +199,10 @@ function getJSON(url, t = 8000) {
     if (s3.overlayHidden !== true) failures.push('步骤3：叠加层未隐藏');
     if (s3.canvasHidden) failures.push('步骤3：内置画布仍被隐藏');
     if (s3.inkSamples < 20) failures.push(`步骤3：切回后画布没有内容（着墨 ${s3.inkSamples}）`);
+
+    // 回到逻辑拓扑，供步骤 4 验证"再次探测后星型模式已退出"
+    await evaluate("document.querySelector('[data-view=\\\"graph\\\"]').click(); 'ok'");
+    await new Promise((r) => setTimeout(r, 1000));
   } else {
     console.log('\n⊘ 未提供高德凭据，跳过步骤 3');
   }
