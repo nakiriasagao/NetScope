@@ -54,6 +54,7 @@ const LAN_LOCK_FILE = path.join(__dirname, 'lan-lock-view-e2e.js');
 const CACHE_FILE = path.join(__dirname, 'map-cache-e2e.js');
 const MAP_STYLE_FILE = path.join(__dirname, 'map-style-e2e.js');
 const AMAP_TO_BUILTIN_FILE = path.join(__dirname, 'amap-graph-to-builtin-e2e.js');
+const MATRIX_FILE = path.join(__dirname, 'basemap-matrix-e2e.js');
 
 /**
  * 测试注册表：name → { file, title, kind, group }
@@ -76,13 +77,14 @@ const REGISTRY = {
   lanlock: { file: LAN_LOCK_FILE, title: '局域网锁定世界地图', kind: 'script', group: 'map', browser: true },
   mapstyle: { file: MAP_STYLE_FILE, title: '世界地图默认国家划分样式', kind: 'script', group: 'map', browser: true },
   amaptobuiltin: { file: AMAP_TO_BUILTIN_FILE, title: '高德逻辑拓扑切回内置地图', kind: 'script', group: 'map', browser: true, amap: true },
+  matrix: { file: MATRIX_FILE, title: '视图×底图全组合', kind: 'script', group: 'map', browser: true, amap: true },
   cache: { file: CACHE_FILE, title: '地图数据缓存行为', kind: 'script', group: 'core' },
 };
 
 const GROUPS = {
   core: ['unit', 'smoke', 'cache'],
-  map: ['lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin'],
-  all: ['unit', 'smoke', 'cache', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin'],
+  map: ['lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
+  all: ['unit', 'smoke', 'cache', 'lan', 'color', 'mapstyle', 'amap', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
 };
 
 /** 解析 --only= / --list / --all */
