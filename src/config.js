@@ -5,6 +5,7 @@
  * 所有可调参数集中在此，便于使用者按需修改或通过环境变量覆盖。
  */
 
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
@@ -21,11 +22,45 @@ function envBool(name, fallback) {
   return /^(1|true|yes|on)$/i.test(raw);
 }
 
-const ROOT = path.resolve(__dirname, '..');
+/**
+ * 应用根目录
+ *
+ * 三种运行形态都要正确：
+ *   1. 源码运行（node src/server.js）→ 项目根目录；
+ *   2. 打包成单文件 exe（Node SEA）→ exe 所在目录（data/ 需要在它旁边可写）；
+ *   3. 显式指定（NETSCOPE_ROOT）→ 优先使用，便于做绿色版/多实例。
+ */
+function resolveRoot() {
+  if (process.env.NETSCOPE_ROOT) return path.resolve(process.env.NETSCOPE_ROOT);
+  let seaMode = false;
+  try {
+    // eslint-disable-next-line global-require
+    const sea = require('node:sea');
+    seaMode = Boolean(sea && typeof sea.isSea === 'function' && sea.isSea());
+  } catch (_) {
+    seaMode = false;
+  }
+  if (seaMode) return path.dirname(process.execPath);
+  return path.resolve(__dirname, '..');
+}
+
+const ROOT = resolveRoot();
+
+/** 单文件模式下 public/ 可能不存在（资源已内嵌），因此单独判断 */
+function resolvePublicDir(root) {
+  const onDisk = path.join(root, 'public');
+  try {
+    if (fs.existsSync(path.join(onDisk, 'index.html'))) return onDisk;
+  } catch (_) {
+    /* ignore */
+  }
+  // 回退到源码目录（开发时从 dist/ 运行 exe 的场景）
+  return path.join(path.resolve(__dirname, '..'), 'public');
+}
 
 const config = {
   root: ROOT,
-  publicDir: path.join(ROOT, 'public'),
+  publicDir: resolvePublicDir(ROOT),
   dataDir: path.join(ROOT, 'data'),
 
   http: {
