@@ -908,9 +908,39 @@ function buildLanTopology(scan, hostnameHint) {
 /* 高德地图配置与代理                                                  */
 /* ------------------------------------------------------------------ */
 
-/** GET /api/amap/config —— 当前配置状态（密钥掩码） */
+/**
+ * GET /api/amap/config —— 当前配置状态（密钥掩码）
+ *
+ * 默认**不回传明文密钥**。但 exe 版每次启动都是新的应用窗口，
+ * 浏览器 localStorage 可能为空，前端就无法用已保存的 Key 加载底图，
+ * 表现成"Key 没被缓存、每次都要重填"。
+ *
+ * 因此当满足以下**全部**条件时，附带明文以便前端回填：
+ *   1. 请求来自本机回环地址（127.0.0.1 / ::1）—— 服务默认也只监听回环；
+ *   2. 显式带上 includePlain=1（前端在本地存储缺失时才这么请求）。
+ * 局域网访问（--host 0.0.0.0）拿不到明文。
+ */
 async function amapConfig(req) {
-  return { ok: true, config: amap.configStatus(req), hints: amap.AMAP_SETUP_HINTS };
+  const status = amap.configStatus(req);
+  const url = new URL(req.url, 'http://127.0.0.1');
+  const wantPlain = url.searchParams.get('includePlain') === '1';
+  const remote = String(req.socket && req.socket.remoteAddress ? req.socket.remoteAddress : '');
+  const isLoopback = remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1';
+
+  if (wantPlain && isLoopback) {
+    const cred = amap.resolveCredentials(req);
+    const stored = amap.loadStoredConfig ? amap.loadStoredConfig() : {};
+    const plainKey = stored.key || cred.key || '';
+    const plainSecurity = stored.security || cred.security || '';
+    if (plainKey) {
+      return {
+        ok: true,
+        config: { ...status, keyPlain: plainKey, securityPlain: plainSecurity },
+        hints: amap.AMAP_SETUP_HINTS,
+      };
+    }
+  }
+  return { ok: true, config: status, hints: amap.AMAP_SETUP_HINTS };
 }
 
 /** POST /api/amap/config —— 保存密钥（供设置面板使用，默认只写本地文件） */
@@ -1000,4 +1030,4 @@ const routes = [
   } },
 ];
 
-module.exports = { routes, health, selfTest };
+module.exports = { routes, health, selfTest, amapConfig };
