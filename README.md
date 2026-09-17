@@ -410,7 +410,7 @@ node tools/build-apk.js      # → dist/android/netscope-1.0.0.apk（约 16 KB�
 node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 ```
 
-### Windows 便携版
+### Windows 便携版（独立窗口）
 
 产物在 `dist/` 下，**整个文件夹一起拷贝**即可在任何 Windows 10/11 上运行：
 
@@ -422,36 +422,62 @@ node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 | `启动 NetScope.bat` | 双击启动的批处理 |
 | `使用说明.txt` | 面向使用者的简短说明 |
 
-命令行参数：`--port 8787`、`--host 0.0.0.0`（允许局域网访问）、`--no-open`、`--help`。
+**窗口行为**：双击后打开一个**独立应用窗口**（Chrome/Edge 的 `--app` 模式：无地址栏、
+无标签页，观感与原生程序一致）；**关闭该窗口即同时关闭后端服务**，后台不留进程。
+系统未装 Chrome/Edge 时回退为默认浏览器，此时用 Ctrl+C 退出。
+
+命令行参数：`--port 8787`、`--host 0.0.0.0`（允许局域网/手机访问）、`--no-window`、`--help`。
 
 > **为什么不是严格单文件？** Node 的 SEA 机制对入口脚本的 `require()` 只支持内置模块，
 > 相对路径依赖会抛 `ERR_UNKNOWN_BUILTIN_MODULE`。项目已用自带的 `tools/bundle.js`
 > 把 `src/` 打包成单个文件再注入 exe，但**前端资源**仍从同级 `public/` 读取 ——
 > 因此交付形态是"单目录绿色版"，而不是"单文件"。
 
-### Android APK
+### Android APK（手机上独立运行，不需要电脑）
 
-`dist/android/netscope-1.0.0.apk`：
+`dist/android/netscope-1.1.0.apk`：
 
 - 包名 `com.netscope.app`，最低 Android 5.0（API 21）；
 - 只申请 `INTERNET` 与 `ACCESS_NETWORK_STATE`，**不含**定位 / 存储 / 相机等敏感权限；
 - 使用 Debug 签名（可直接安装；上架应用商店需换成正式签名）。
 
-**它是 WebView 客户端**：NetScope 的探测能力跑在电脑上，手机端负责完整呈现界面。
-首次打开请点右上角菜单 →「设置」，填写电脑上 NetScope 的地址（如 `http://192.168.1.5:8787`）。
+**它是完全独立的**：应用在手机内部启动一个 HTTP 服务（`core/NetHttpd` + `core/NetApi`），
+探测逻辑由 `core/Probe.java` 在**本机**执行，WebView 加载 `http://127.0.0.1:<port>/`，
+前端资源打包在 `assets/web/`。**不需要电脑，也不需要任何外部后端。**
 
-> 手机访问的前提：电脑上以 `netscope.exe --host 0.0.0.0` 启动，防火墙放行该端口，
-> 且手机与电脑在同一局域网。
+手机端能力：
 
-### Android 构建工具
+| 功能 | 手机端 |
+| --- | --- |
+| 目标解析 / DNS | ✅ 系统解析器 |
+| 可达性探测（ICMP + TCP） | ✅ |
+| 端口扫描 | ✅ |
+| 公网出口 IP + 地理定位 | ✅ |
+| 局域网设备发现 | ✅（Android 10+ 读不到 ARP 表，故无 MAC / 厂商信息） |
+| 路由追踪 | ⚠️ 可确认目标、RTT，以及由回包 TTL 推算的**跳数距离**；**无法显示中间路由器 IP** |
+| TLS 证书链检查、多解析器对比 | ❌ 暂未实现（界面会明确提示） |
 
-APK 由 Android SDK 官方命令行工具链（`aapt2` / `d8` / `zipalign` / `apksigner`）直接构建，
-**不依赖 Gradle**。首次构建会自动下载工具（约 80 MB）：
+> **为什么拿不到中间路由器 IP？** Android 应用不能创建原始套接字（需 root），
+> Java 也读不到 ICMP「TTL 超时」报文的来源地址。程序**不会伪造**这些地址，
+> 而是如实标注平台限制，并提示"需要完整逐跳拓扑时请使用桌面版"。
+
+> 想用手机看电脑上的完整结果也可以：电脑上以 `netscope.exe --host 0.0.0.0` 启动，
+> 手机浏览器访问 `http://<电脑IP>:8787` —— 但这**不是必须的**。
+
+### 构建工具
 
 ```powershell
-node tools/fetch-android-tools.js    # 下载 build-tools 与 android.jar 到 build/android-sdk
-node test/run-tests.js --only=bundle # 验收打包产物（会真实启动 exe）
+node tools/fetch-android-tools.js     # 下载 build-tools 与 android.jar（约 80 MB，仅首次）
+node test/run-tests.js --only=bundle  # 验收打包产物（会真实启动 exe）
+node test/run-tests.js --only=android # 手机端后端桌面验证（纯 Java，脱离 Android 运行）
 ```
+
+APK 由 Android SDK 官方命令行工具链（`aapt2` / `javac` / `d8` / `zipalign` / `apksigner`）
+直接构建，**不依赖 Gradle**。
+
+`android/java/com/netscope/app/core/` 下的类刻意**不引用任何 Android API**，
+因此可在桌面 JVM 上直接编译运行（`test/android-backend-verify.js` 就是这么做的），
+既方便验证，也保证核心逻辑与 UI 解耦。
 
 ---
 
