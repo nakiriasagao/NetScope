@@ -173,6 +173,30 @@
     local: function (query) {
       return request('/api/local', { query: query });
     },
+    /** 局域网设备扫描（返回设备列表 + 星型拓扑结构） */
+    lanScan: function (options) {
+      return request('/api/lanscan', { method: 'POST', body: options || {} });
+    },
+    /** 高德地图配置状态 */
+    amapConfig: function () {
+      return request('/api/amap/config');
+    },
+    /** 保存高德配置 */
+    amapSaveConfig: function (body) {
+      return request('/api/amap/config', { method: 'POST', body: body });
+    },
+    /** 高德连通性测试（可用临时密钥，不落盘） */
+    amapTest: function (body) {
+      return request('/api/amap/test', { method: 'POST', body: body || {} });
+    },
+    /** 高德 IP 定位 */
+    amapIp: function (ip) {
+      return request('/api/amap/ip', { method: 'POST', body: { ip: ip } });
+    },
+    /** 高德逆地理编码 */
+    amapRegeo: function (lon, lat) {
+      return request('/api/amap/regeo', { method: 'POST', body: { lon: lon, lat: lat } });
+    },
     egress: function () {
       return request('/api/egress');
     },
