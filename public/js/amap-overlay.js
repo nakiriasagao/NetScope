@@ -143,6 +143,7 @@
     var AMap = null;
     var map = null;
     var destroyed = false;
+    var suspended = false;
     var animFrame = null;
     var lastNodes = null;
     var lastContext = null;
@@ -168,9 +169,49 @@
     }
 
     function loop() {
-      if (destroyed) return;
+      if (destroyed || suspended) return;
       renderer.draw();
       animFrame = requestAnimationFrame(loop);
+    }
+
+    /**
+     * 挂起 / 恢复：用于"逻辑拓扑"视图——该视图由内置引擎绘制，
+     * 但**不改变用户的底图选择**（恢复后仍回到高德地图）。
+     */
+    function setSuspended(next) {
+      if (destroyed) return;
+      suspended = Boolean(next);
+      if (suspended) {
+        if (animFrame) cancelAnimationFrame(animFrame);
+        animFrame = null;
+        if (host) host.hidden = true;
+        if (overlayCanvas) overlayCanvas.hidden = true;
+        if (labelLayer) {
+          while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
+        }
+        renderer.plain = false;
+        renderer.reproject = null;
+        renderer.canvas = originalCanvas;
+        renderer.overlay = originalOverlay;
+        renderer.stopAnimation();
+      } else {
+        if (host) host.hidden = false;
+        if (overlayCanvas) overlayCanvas.hidden = false;
+        renderer.canvas = overlayCanvas;
+        renderer.overlay = labelLayer;
+        renderer.plain = true;
+        renderer.reproject = reproject;
+        renderer.mode = 'map';
+        renderer.resize();
+        try {
+          if (map) map.resize();
+        } catch (e) {
+          /* ignore */
+        }
+        reproject();
+        renderer.draw();
+        loop();
+      }
     }
 
     /** 把当前拓扑纳入视野（自己算包围盒，避免依赖高德覆盖物） */
@@ -277,7 +318,21 @@
       },
 
       draw: function () {
-        if (!destroyed) renderer.draw();
+        if (!destroyed && !suspended) renderer.draw();
+      },
+
+      /** 逻辑拓扑视图期间挂起高德（不改变用户选择的底图） */
+      suspend: function () {
+        setSuspended(true);
+      },
+
+      /** 恢复高德底图 */
+      resume: function () {
+        setSuspended(false);
+      },
+
+      isSuspended: function () {
+        return suspended;
       },
 
       resize: function () {
