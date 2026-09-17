@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const REPO_URL = 'https://github.com/nakiriasagao/webtraceor.git';
+const REPO_URL = 'https://github.com/nakiriasagao/NetScope.git';
 const BRANCH = 'main';
 
 function arg(name, fallback) {
@@ -132,7 +132,7 @@ function main() {
   console.log('\n================ 发布结果 ================');
   console.log('最新提交：' + log);
   console.log('远端分支：' + (remoteRef || '（未找到，请检查推送输出）'));
-  console.log('仓库地址：https://github.com/nakiriasagao/webtraceor');
+  console.log('仓库地址：https://github.com/nakiriasagao/NetScope');
 }
 
 function writeMessageFile() {
