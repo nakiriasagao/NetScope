@@ -219,16 +219,21 @@ function traceWithIcmpSocket(host, options = {}) {
       const list = [...hops.values()].sort((a, b) => a.ttl - b.ttl).map((h) => finalizeHop(h, queries));
       const responded = list.filter((h) => h.ip);
       const rtts = responded.map((h) => h.latency.avg).filter((v) => typeof v === 'number');
+      const lastRespondedIP = [...responded].reverse()[0]?.ip || null;
       const summary = {
         hopCount: list.length,
         respondedHops: responded.length,
         timeouts: list.filter((h) => h.isTimeout).length,
         destinationIP: dest,
-        reachedTarget: completed || (list.length > 0 && list[list.length - 1].ip === dest),
+        // 只有真正收到目标主机的回应才算到达（不能用"命令跑完"代替）
+        reachedTarget: Boolean(lastRespondedIP && lastRespondedIP === dest),
+        commandCompleted: completed,
+        lastRespondedIP,
+        probedHops: list.length,
         minRtt: rtts.length ? Math.min(...rtts) : null,
         maxRtt: rtts.length ? Math.max(...rtts) : null,
         avgRtt: rtts.length ? Math.round((rtts.reduce((a, b) => a + b, 0) / rtts.length) * 10) / 10 : null,
-        lastHopIP: [...responded].reverse()[0]?.ip || null,
+        lastHopIP: lastRespondedIP,
       };
 
       resolve({
@@ -542,9 +547,33 @@ async function enrichTrace(trace, options = {}) {
 
   for (const hop of hops) {
     hop.classification = hop.ip ? classifyIP(hop.ip) : null;
-    if (hop.classification) {
-      hop.hostname = hop.hostname || (hop.classification.label ? null : null);
-    }
+    // 标记这一跳是否就是目标主机。前端据此区分"终点"与"最后一个有响应的中间节点"，
+    // 避免把骨干网路由器当成目的地（曾导致江苏的 IP 被画到广州）。
+    hop.isDestination = Boolean(trace.summary && hop.ip && hop.ip === trace.summary.destinationIP);
+  }
+
+  // 轨迹没走到目标时，给出可读的原因，界面会用它提示用户
+  if (trace.summary && trace.summary.destinationIP && !trace.summary.reachedTarget) {
+    const s = trace.summary;
+    const tailTimeouts = (() => {
+      let count = 0;
+      for (let i = hops.length - 1; i >= 0; i -= 1) {
+        if (hops[i].isTimeout) count += 1;
+        else break;
+      }
+      return count;
+    })();
+    trace.unreached = {
+      destinationIP: s.destinationIP,
+      lastRespondedIP: s.lastRespondedIP || null,
+      probedHops: s.probedHops || hops.length,
+      trailingTimeouts: tailTimeouts,
+      reason: tailTimeouts > 0 && s.lastRespondedIP
+        ? `轨迹在第 ${hops.filter((h) => h.ip).length ? [...hops].reverse().find((h) => h.ip).ttl : '?'} 跳`
+          + `（${s.lastRespondedIP}）之后连续 ${tailTimeouts} 跳无响应，未能确认到达目标 ${s.destinationIP}。`
+          + '常见原因：目标或运营商过滤了探测报文（ICMP/UDP），这是正常现象。'
+        : `未能收到目标 ${s.destinationIP} 的任何响应。`,
+    };
   }
 
   return trace;
