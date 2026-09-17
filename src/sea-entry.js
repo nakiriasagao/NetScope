@@ -99,16 +99,27 @@ function printHelp() {
 }
 
 /**
+ * 应用窗口使用的浏览器配置目录
+ *
+ * 必须是**稳定路径**：localStorage（高德 Key、底图偏好、界面设置）都按
+ * "来源 + 配置目录"隔离，若每次启动都用新的临时目录，用户会表现为
+ * "设置不被保存 / Key 每次都要重填"。因此固定放在用户数据目录下。
+ */
+function windowProfileDir() {
+  const base = process.env.LOCALAPPDATA || process.env.APPDATA || os.tmpdir();
+  return path.join(base, 'NetScope', 'browser-profile');
+}
+
+/**
  * 以「应用窗口」方式打开页面，并在窗口关闭时回调 onClosed。
  * @returns {import('child_process').ChildProcess|null} 子进程；null 表示未能用应用模式打开
  */
 function openAppWindow(browserPath, url, onClosed) {
-  // 独立的用户数据目录：避免复用已有浏览器进程（复用会导致拿不到窗口关闭事件）
-  const profileDir = path.join(os.tmpdir(), 'netscope-window-' + process.pid);
+  const profileDir = windowProfileDir();
   try {
     fs.mkdirSync(profileDir, { recursive: true });
   } catch (_) {
-    /* 目录创建失败也继续尝试 */
+    /* 目录创建失败也继续尝试，浏览器会自行处理 */
   }
   const args = [
     `--app=${url}`,
@@ -124,24 +135,12 @@ function openAppWindow(browserPath, url, onClosed) {
   } catch (_) {
     return null;
   }
-  child.on('exit', () => {
-    cleanupProfile(profileDir);
+  const finish = () => {
     if (typeof onClosed === 'function') onClosed();
-  });
-  child.on('error', () => {
-    cleanupProfile(profileDir);
-    if (typeof onClosed === 'function') onClosed();
-  });
+  };
+  child.on('exit', finish);
+  child.on('error', finish);
   return child;
-}
-
-function cleanupProfile(dir) {
-  // 浏览器退出后删除临时配置目录；若有残留文件删不掉也不影响使用
-  try {
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
-  } catch (_) {
-    /* ignore */
-  }
 }
 
 /** 回退方案：用系统默认浏览器打开（无法感知窗口关闭） */
