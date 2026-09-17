@@ -456,6 +456,123 @@
   };
 
   // ------------------------------------------------------------------
+  // 局域网星型拓扑
+  // ------------------------------------------------------------------
+
+  /**
+   * 绘制"当前网络"的星型拓扑：以网关为中心，设备环绕四周，本机与互联网分列上下。
+   *
+   * 为什么用星型而不是地理投影：
+   *   局域网设备使用私有地址（192.168.x.x 等），在真实地理上没有对应位置，
+   *   把它们画到世界地图上等于伪造坐标。星型拓扑表达的是"连接关系"，
+   *   这才是本地网络真正需要看清的结构。
+   *
+   * @param {{ nodes: Array, links: Array, subnet?: string, byType?: object }} topology
+   */
+  Renderer.prototype.setLanTopology = function (topology) {
+    var self = this;
+    var topo = topology || { nodes: [], links: [] };
+    var gateway = null;
+    var selfNode = null;
+    var internet = null;
+    var devices = [];
+
+    (topo.nodes || []).forEach(function (node) {
+      if (node.role === 'gateway') gateway = node;
+      else if (node.role === 'self') selfNode = node;
+      else if (node.role === 'internet') internet = node;
+      else devices.push(node);
+    });
+
+    var cx = this.width / 2;
+    var cy = this.height / 2;
+    // 半径必须留出边距：节点贴着画布边缘时标签会被裁掉。
+    // 这里保证横向至少留 78px、纵向至少留 64px。
+    var radius = Math.max(70, Math.min(this.width / 2 - 78, (this.height / 2 - 64) / 0.8, Math.min(this.width, this.height) * 0.36));
+    var nodes = [];
+    var arcs = [];
+
+    function makeNode(raw, x, y, kind) {
+      var node = {
+        kind: kind,
+        label: raw.label || raw.hostname || raw.ip || '设备',
+        subtitle: [raw.ip, raw.vendor].filter(Boolean).join(' · '),
+        ip: raw.ip || null,
+        mac: raw.mac || null,
+        vendor: raw.vendor || null,
+        hostname: raw.hostname || null,
+        deviceType: raw.type || null,
+        typeLabel: raw.typeLabel || null,
+        ssdp: raw.ssdp || null,
+        mdns: raw.mdns || null,
+        lx: x,
+        ly: y,
+        x: x,
+        y: y,
+        latency: null,
+        hops: [],
+      };
+      node.geoStatus = kind === 'device' ? 'public' : 'private';
+      return node;
+    }
+
+    var gatewayNode = gateway
+      ? makeNode(gateway, cx, cy, 'gateway')
+      : makeNode({ label: '网关（未识别）', hostname: '网关' }, cx, cy, 'gateway');
+    gatewayNode.isGateway = true;
+    nodes.push(gatewayNode);
+
+    if (selfNode) {
+      var selfRendered = makeNode(selfNode, cx, Math.max(40, cy - radius * 0.85), 'start');
+      selfRendered.isStart = true;
+      nodes.push(selfRendered);
+      arcs.push({ from: selfRendered, to: gatewayNode, index: 0, skipped: 0, kind: 'uplink' });
+    }
+
+    if (internet) {
+      var internetNode = makeNode(internet, cx, Math.min(this.height - 40, cy + radius * 0.85), 'internet');
+      internetNode.isTarget = true;
+      nodes.push(internetNode);
+      arcs.push({ from: gatewayNode, to: internetNode, index: 1, skipped: 0, kind: 'wan' });
+    }
+
+    devices.forEach(function (device, index) {
+      var total = Math.max(1, devices.length);
+      var angle = ((index + 0.5) / total) * Math.PI * 2 - Math.PI / 2;
+      // 两个同心环，避免设备太多时标签互相重叠
+      var ring = index % 2 === 0 ? radius : radius * 0.72;
+      var x = clamp(cx + Math.cos(angle) * ring, 70, self.width - 70);
+      var y = clamp(cy + Math.sin(angle) * ring * 0.8, 58, self.height - 58);
+      var node = makeNode(device, x, y, 'device');
+      node.deviceIndex = index;
+      nodes.push(node);
+      arcs.push({ from: gatewayNode, to: node, index: index + 2, skipped: 0, kind: 'lan' });
+    });
+
+    nodes.forEach(function (node, index) {
+      node.index = index;
+    });
+
+    this.nodes = nodes;
+    this.arcs = arcs;
+    this.unlocated = [];
+    this.lanMode = true;
+    this.mode = 'graph';
+    this.stats = {
+      hopCount: devices.length,
+      locatedCount: devices.length,
+      unlocatedCount: 0,
+      avgRtt: null,
+      maxRtt: null,
+      lossPct: 0,
+      countries: [],
+      lan: { subnet: topo.subnet || null, deviceCount: devices.length, byType: topo.byType || {} },
+    };
+    this.stopAnimation();
+    this.draw();
+  };
+
+  // ------------------------------------------------------------------
   // 逻辑拓扑布局（力导向）
   // ------------------------------------------------------------------
 
@@ -876,9 +993,32 @@
   // 节点与标签
   // ------------------------------------------------------------------
 
+  /** 局域网设备类型 → 填充色 */
+  var DEVICE_COLORS = {
+    gateway: '#fbbf24',
+    self: '#34d399',
+    internet: '#f472b6',
+    router: '#fbbf24',
+    computer: '#38bdf8',
+    phone: '#a78bfa',
+    printer: '#f59e0b',
+    nas: '#22d3ee',
+    camera: '#fb7185',
+    tv: '#818cf8',
+    iot: '#4ade80',
+    server: '#60a5fa',
+    virtual: '#64748b',
+    unknown: '#64748b',
+  };
+
   Renderer.prototype.nodeColor = function (node) {
-    if (node.kind === 'start') return COLORS.start;
+    if (node.kind === 'gateway') return DEVICE_COLORS.gateway;
+    if (node.kind === 'internet') return DEVICE_COLORS.internet;
+    if (node.kind === 'start' || node.isStart) return COLORS.start;
     if (node.isTarget) return COLORS.target;
+    if (node.lanMode || (node.deviceType && node.kind === 'device')) {
+      return DEVICE_COLORS[node.deviceType] || DEVICE_COLORS.unknown;
+    }
     if (node.geoStatus === 'private') return COLORS.start;
     if (typeof node.latency === 'number') {
       if (node.latency <= cfg.latencyThresholds.good) return COLORS.start;
@@ -896,7 +1036,7 @@
       if (!isFinite(pos.x) || !isFinite(pos.y)) return;
       var isHover = self.hovered === node;
       var isSelected = self.selected === node;
-      var radius = node.isStart ? 6 : node.isTarget ? 7 : 5.5;
+      var radius = node.kind === 'gateway' ? 9 : node.kind === 'internet' ? 8.5 : node.isTarget ? 7 : node.isStart ? 7 : 5.5;
       if (isHover || isSelected) radius += 2.2;
       var color = self.nodeColor(node);
 
@@ -940,7 +1080,9 @@
 
   /**
    * SVG 标签层：比 Canvas 文本更清晰，且可被浏览器原生选中
-   * 标签数量较多时（>4 个节点）只显示悬停/选中节点的标签，避免互相遮挡。
+   *
+   * 局域网拓扑（星型）节点较少，标签必须全部可见；
+   * 路由拓扑节点较多时，只显示悬停/选中节点的标签，避免互相遮挡。
    */
   Renderer.prototype.drawOverlay = function () {
     var self = this;
@@ -950,7 +1092,8 @@
 
     var ns = 'http://www.w3.org/2000/svg';
     var placed = [];
-    var showAll = this.nodes.length <= 4;
+    // 星型拓扑：所有标签都显示；普通路由拓扑：节点超过 4 个时只显示悬停/选中的
+    var showAll = this.lanMode === true || this.nodes.length <= 4;
 
     this.nodes.forEach(function (node) {
       var pos = self.nodeScreen(node);
@@ -963,7 +1106,7 @@
 
       var text = node.label || '';
       if (typeof node.latency === 'number' && node.latency > 0) text += '  ' + node.latency + ' ms';
-      else if (node.isStart) text += '  0 ms';
+      else if (node.isStart && !self.lanMode) text += '  0 ms';
 
       var w = Math.min(260, text.length * 7 + 18);
       var h = 20;
