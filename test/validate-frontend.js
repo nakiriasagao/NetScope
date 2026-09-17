@@ -55,8 +55,17 @@ if (!orderOk) failures += 1;
 console.log(`${orderOk ? '✔' : '✘'} 脚本顺序: ${scripts.join(' → ')}`);
 
 // 引用的静态文件必须真实存在
+// 例外：js/runtime-config.js 是**服务端按当前监听地址动态生成**的，不应落盘
+// （落盘就会被打进发行包并把端口写死，见 AGENTS.md「桌面端设置持久化」）
+const GENERATED = new Set(['js/runtime-config.js']);
 for (const src of scripts.concat(['css/style.css', 'data/world-110m.json'])) {
   const p = path.join(root, 'public', src);
+  if (GENERATED.has(src)) {
+    const onDisk = fs.existsSync(p);
+    if (onDisk) failures += 1;
+    console.log(`${onDisk ? '✘' : '✔'} 生成物不应落盘: public/${src}`);
+    continue;
+  }
   const exists = fs.existsSync(p);
   if (!exists) failures += 1;
   console.log(`${exists ? '✔' : '✘'} 资源存在: public/${src}`);
