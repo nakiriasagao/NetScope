@@ -226,7 +226,6 @@
       optShowLabels: $('opt-show-labels'),
       optShowLinks: $('opt-show-links'),
       optShowGrid: $('opt-show-grid'),
-      optShowAdmin1: $('opt-show-admin1'),
       btnReloadMap: $('btn-reload-map'),
       optAnimate: $('opt-animate'),
       optNight: $('opt-night'),
@@ -351,6 +350,27 @@
 
   var BASE_MAP_KEY = 'netscope.basemap';
 
+  /**
+   * 底图切换的"代次"令牌
+   *
+   * 高德的脚本与地图实例是**异步**初始化的（首次初始化约数百毫秒）。
+   * 如果用户在这段时间里又切换了底图，早先那次异步初始化完成时会
+   * 无条件把状态改回高德 —— 表现为"选了内置世界地图，结果画面空白/仍停在高德"。
+   * 每次切换底图都递增该令牌，异步回调完成时若令牌已变则放弃本次结果。
+   */
+  var baseMapToken = 0;
+  /** 启动时"恢复上次底图"的延迟任务句柄：用户手动切换底图时需取消它 */
+  var pendingBaseMapInit = null;
+
+  /** 用户手动切换底图（下拉框 / 代码调用）——用于取消待执行的启动恢复任务 */
+  function userSwitchBaseMap(mode) {
+    if (pendingBaseMapInit) {
+      clearTimeout(pendingBaseMapInit);
+      pendingBaseMapInit = null;
+    }
+    return switchBaseMap(mode);
+  }
+
   /** 启动时恢复上次选择的底图 */
   function initBaseMap() {
     var saved = 'builtin';
@@ -363,8 +383,11 @@
     state.baseMap = saved;
     updateBaseMapStatus();
     if (saved === 'amap') {
-      // 页面加载后异步切换，避免阻塞首屏
-      setTimeout(function () {
+      // 页面加载后异步切换，避免阻塞首屏。
+      // 记录句柄：若用户在初始化完成前手动切走底图，需要取消它，
+      // 否则这次延迟的切换会把用户的选择覆盖掉（画面会变成空白的高德视图）。
+      pendingBaseMapInit = setTimeout(function () {
+        pendingBaseMapInit = null;
         switchBaseMap('amap');
       }, 300);
     }
@@ -391,6 +414,9 @@
     if (mode === state.baseMap && ((mode === 'amap' && amapView) || (mode === 'builtin' && !amapView))) {
       return Promise.resolve();
     }
+
+    // 记录本次切换的代次：异步初始化完成后据此判断是否已被新的切换取代
+    var token = ++baseMapToken;
 
     if (mode === 'builtin') {
       if (amapView) {
@@ -460,6 +486,13 @@
         return Amap.loadAmap({ plugins: [] });
       })
       .then(function () {
+        // 异步初始化期间用户又切换了底图（例如切回内置）→ 放弃本次高德初始化。
+        // 否则会把用户刚选的内置底图覆盖掉，画面变成空白的高德视图。
+        if (token !== baseMapToken) {
+          if (el.optBaseMap) el.optBaseMap.value = state.baseMap;
+          updateBaseMapStatus();
+          return null;
+        }
         if (amapView) return amapView;
         el.canvas.hidden = true;
         el.overlay.hidden = false;
@@ -484,6 +517,34 @@
           },
         });
         return view.init({ zoom: 3, center: [110, 32], mapStyle: 'amap://styles/darkblue' }).then(function () {
+          // 地图实例创建也是异步的：期间用户可能已经切回内置底图。
+          // 此时必须销毁刚建好的高德视图并交还内置画布，不能把状态改回高德。
+          if (token !== baseMapToken) {
+            try {
+              view.destroy();
+            } catch (e) {
+              /* ignore */
+            }
+            if (amapView === view) amapView = null;
+            if (el.amapHost) {
+              el.amapHost.hidden = true;
+              el.amapHost.innerHTML = '';
+            }
+            if (el.canvas) el.canvas.hidden = false;
+            if (el.overlay) el.overlay.hidden = false;
+            renderer.plain = false;
+            renderer.reproject = null;
+            renderer.canvas = el.canvas;
+            renderer.overlay = el.overlay;
+            renderer.ctx = el.canvas.getContext('2d');
+            renderer.resize();
+            if (state.hops.length) drawCurrentTrace();
+            else renderer.fitToContainer();
+            if (renderer.options.animate) renderer.startAnimation();
+            if (el.optBaseMap) el.optBaseMap.value = state.baseMap;
+            updateBaseMapStatus();
+            return null;
+          }
           amapView = view;
           state.baseMap = 'amap';
           try {
@@ -516,6 +577,8 @@
         });
       })
       .catch(function (error) {
+        // 已被新的切换取代 → 不要回退，也不要把状态改回内置（交给新的切换处理）
+        if (token !== baseMapToken) return null;
         // 回退到内置地图，并说明原因
         if (amapView) {
           amapView.destroy();
@@ -989,7 +1052,7 @@
     // 底图切换
     if (el.optBaseMap) {
       el.optBaseMap.addEventListener('change', function () {
-        switchBaseMap(el.optBaseMap.value);
+        userSwitchBaseMap(el.optBaseMap.value);
       });
     }
 
@@ -1045,7 +1108,6 @@
       [el.optShowLabels, 'showLabels'],
       [el.optShowLinks, 'showLinks'],
       [el.optShowGrid, 'showGrid'],
-      [el.optShowAdmin1, 'showAdmin1'],
       [el.optAnimate, 'animate'],
       [el.optNight, 'night'],
     ].forEach(function (pair) {
