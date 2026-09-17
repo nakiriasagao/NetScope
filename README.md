@@ -432,6 +432,7 @@ node test/lan-lock-view-e2e.js     # 扫描局域网后锁定世界地图
 node test/map-cache-e2e.js         # 世界地图数据缓存行为
 node test/map-style-e2e.js         # 世界地图默认样式（按国家划分）
 node test/amap-graph-to-builtin-e2e.js # 高德逻辑拓扑切回内置地图
+node test/basemap-matrix-e2e.js    # 视图×底图 21 条切换路径
 node test/validate-frontend.js    # 前端静态校验（DOM id、标签闭合、脚本顺序、资源存在性）
 ```
 
