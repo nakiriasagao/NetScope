@@ -59,6 +59,7 @@ const PACKAGE_FILE = path.join(__dirname, 'package-e2e.js');
 const ANDROID_BACKEND_FILE = path.join(__dirname, 'android-backend-verify.js');
 const AMAP_PERSIST_FILE = path.join(__dirname, 'amap-persistence-e2e.js');
 const DESKTOP_PERSIST_FILE = path.join(__dirname, 'desktop-persistence-e2e.js');
+const UNREACHED_FILE = path.join(__dirname, 'unreached-destination-e2e.js');
 
 /**
  * 测试注册表：name → { file, title, kind, group }
@@ -71,6 +72,7 @@ const REGISTRY = {
   color: { file: COLOR_FILE, title: '节点着色规则', kind: 'script', group: 'map', browser: true },
   amap: { file: AMAP_FILE, title: '高德底图验收', kind: 'script', group: 'map', browser: true, amap: true },
   amappersist: { file: AMAP_PERSIST_FILE, title: '高德 Key 持久化（新窗口无本地缓存）', kind: 'script', group: 'map', browser: true, amap: true },
+  unreached: { file: UNREACHED_FILE, title: '未到达目标时的显示正确性', kind: 'script', group: 'map', browser: true, amap: false },
   deskpersist: { file: DESKTOP_PERSIST_FILE, title: '桌面版设置持久化（跨重启保留）', kind: 'script', group: 'pack', browser: true },
   switch: { file: SWITCH_FILE, title: '底图切换与跳数标签', kind: 'script', group: 'map', browser: true, amap: true },
   style: { file: STYLE_FILE, title: '图例与样式一致性', kind: 'script', group: 'map', browser: true, amap: true },
@@ -92,8 +94,8 @@ const REGISTRY = {
 const GROUPS = {
   core: ['unit', 'smoke', 'cache'],
   pack: ['bundle', 'android', 'deskpersist'],
-  map: ['amap', 'amappersist', 'lan', 'color', 'mapstyle', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
-  all: ['unit', 'smoke', 'cache', 'bundle', 'android', 'deskpersist', 'amap', 'amappersist', 'lan', 'color', 'mapstyle', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
+  map: ['unreached', 'amap', 'amappersist', 'lan', 'color', 'mapstyle', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
+  all: ['unit', 'smoke', 'cache', 'bundle', 'android', 'deskpersist', 'unreached', 'amap', 'amappersist', 'lan', 'color', 'mapstyle', 'switch', 'style', 'lantrace', 'viewswitch', 'topoperf', 'graphtrace', 'amapgraph', 'keepview', 'lanlock', 'amaptobuiltin', 'matrix'],
 };
 
 /** 解析 --only= / --list / --all */
