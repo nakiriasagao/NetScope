@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const REPO = 'https://github.com/nakiriasagao/webtraceor.git';
+const REPO = 'https://github.com/nakiriasagao/NetScope.git';
 
 function git(args, options = {}) {
   const result = spawnSync('git', args, {
