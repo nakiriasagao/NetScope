@@ -175,43 +175,62 @@
     }
 
     /**
-     * 挂起 / 恢复：用于"逻辑拓扑"视图——该视图由内置引擎绘制，
+     * 挂起 / 恢复：用于「逻辑拓扑」视图——该视图由内置引擎绘制，
      * 但**不改变用户的底图选择**（恢复后仍回到高德地图）。
+     *
+     * 注意：挂起时除了把渲染目标交还内置画布，**还必须让内置画布真正可见**。
+     * 高德模式下内置画布是 hidden + display:none（尺寸为 0），
+     * 只切渲染目标而不取消隐藏，就会出现"数据画了但什么都看不到"。
+     * 画布也因此需要重新量尺寸（隐藏元素量不到尺寸）。
      */
     function setSuspended(next) {
       if (destroyed) return;
       suspended = Boolean(next);
+
       if (suspended) {
         if (animFrame) cancelAnimationFrame(animFrame);
         animFrame = null;
         if (host) host.hidden = true;
         if (overlayCanvas) overlayCanvas.hidden = true;
-        if (labelLayer) {
-          while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
-        }
+        // 交还渲染目标并显示内置画布
         renderer.plain = false;
         renderer.reproject = null;
         renderer.canvas = originalCanvas;
         renderer.overlay = originalOverlay;
-        renderer.stopAnimation();
-      } else {
-        if (host) host.hidden = false;
-        if (overlayCanvas) overlayCanvas.hidden = false;
-        renderer.canvas = overlayCanvas;
-        renderer.overlay = labelLayer;
-        renderer.plain = true;
-        renderer.reproject = reproject;
-        renderer.mode = 'map';
-        renderer.resize();
-        try {
-          if (map) map.resize();
-        } catch (e) {
-          /* ignore */
+        if (originalCanvas) {
+          originalCanvas.hidden = false;
+          // 画布元素可能被替换过，resize 内部会重新获取上下文
+          renderer.ctx = originalCanvas.getContext('2d');
         }
-        reproject();
-        renderer.draw();
-        loop();
+        if (originalOverlay) originalOverlay.hidden = false;
+        if (labelLayer) {
+          while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
+        }
+        renderer.stopAnimation();
+        // 之前隐藏时尺寸为 0，这里必须重新量取
+        renderer.resize();
+        return;
       }
+
+      if (host) host.hidden = false;
+      if (overlayCanvas) overlayCanvas.hidden = false;
+      // 内置画布重新隐藏，交给叠加层绘制
+      if (originalCanvas) originalCanvas.hidden = true;
+      renderer.canvas = overlayCanvas;
+      renderer.overlay = labelLayer;
+      renderer.ctx = overlayCanvas.getContext('2d');
+      renderer.plain = true;
+      renderer.reproject = reproject;
+      renderer.mode = 'map';
+      renderer.resize();
+      try {
+        if (map) map.resize();
+      } catch (e) {
+        /* ignore */
+      }
+      reproject();
+      renderer.draw();
+      loop();
     }
 
     /** 把当前拓扑纳入视野（自己算包围盒，避免依赖高德覆盖物） */
@@ -286,14 +305,23 @@
       },
 
       /**
-       * 设置追踪数据：直接调用内置引擎的 setTrace，
-       * 保证节点聚合、未定位跳点跳过、连线规则完全一致
+       * 设置追踪数据：复用内置引擎的 setTrace。
+       * 注意合并规则必须与当前视图一致：
+       *   高德只呈现地理视图（map），按坐标合并；
+       *   但渲染器可能同时被逻辑拓扑视图使用（挂起高德时），
+       *   若这里强行按坐标合并，会把已经按跳展开的数据覆盖成合并后的少量节点，
+       *   于是"高德模式下的逻辑拓扑"只剩下几个点。
        */
       setTrace: function (hops, context) {
         if (!map) return;
         lastNodes = hops;
         lastContext = context;
-        renderer.setTrace(hops, context);
+        var graph = !suspended && renderer.mode === 'graph';
+        renderer.setTrace(hops, {
+          local: context && context.local,
+          target: context && context.target,
+          merge: !graph,
+        });
         reproject();
         renderer.draw();
         fitToNodes();
@@ -333,6 +361,11 @@
 
       isSuspended: function () {
         return suspended;
+      },
+
+      /** 内置画布（挂起时渲染到这里） */
+      getInnerCanvas: function () {
+        return originalCanvas;
       },
 
       resize: function () {
