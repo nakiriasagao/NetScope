@@ -347,6 +347,14 @@
         el.amapHost.hidden = true;
         el.amapHost.innerHTML = '';
       }
+      if (el.overlayCanvas) el.overlayCanvas.hidden = true;
+      // 双保险：确保渲染器确实回到内置画布（destroy 已做，这里再兜一次）
+      if (renderer.canvas !== el.canvas) {
+        renderer.canvas = el.canvas;
+        renderer.overlay = el.overlay;
+      }
+      renderer.plain = false;
+      renderer.reproject = null;
       el.canvas.hidden = false;
       el.overlay.hidden = false;
       state.baseMap = 'builtin';
@@ -604,7 +612,7 @@
   }
 
   /** 把扫描结果画成星型拓扑（局域网设备没有经纬度，始终用内置引擎） */
-  function renderLanTopologyView(result) {
+  async function renderLanTopologyView(result) {
     var topology = result.topology || { nodes: [], links: [] };
     if (result.egress && result.egress.location) {
       topology.anchor = result.egress.location;
@@ -612,9 +620,11 @@
     }
     state.lan = Object.assign({}, result, { topology: topology });
 
+    // 高德底图无法表达"私有地址"的拓扑：先等它完整切回内置引擎，
+    // 再绘制星型拓扑，否则会画到已隐藏的叠加层上（表现为"看不到拓扑图"）
     if (amapView) {
       toast('局域网设备使用私有地址、没有地理坐标，已切回内置引擎以星型拓扑展示', 'warn', 9000);
-      switchBaseMap('builtin');
+      await switchBaseMap('builtin');
     }
 
     document.querySelectorAll('[data-view]').forEach(function (button) {
@@ -1122,7 +1132,15 @@
     state.portScan = null;
     state.engine = null;
     state.fallbackNotes = [];
+    // 退出局域网星型拓扑模式，并把视图复位为世界地图：
+    // 否则"扫描局域网 → 再探测新目标"会一直停留在逻辑拓扑视图，
+    // 表现为"看不到世界地图"（底图切回内置也没用）
     renderer.lanMode = false;
+    state.lan = null;
+    state.view = 'map';
+    document.querySelectorAll('[data-view]').forEach(function (button) {
+      button.classList.toggle('is-active', button.getAttribute('data-view') === 'map');
+    });
     if (amapView) amapView.setTrace([], {});
     else renderer.setTrace([], {});
     renderer.setSelected(null);
@@ -1292,9 +1310,13 @@
       amapView.setTrace(state.hops, context);
       return;
     }
+    // 追踪数据必须画在世界地图视图上：若此前停在逻辑拓扑（例如刚扫描过局域网），
+    // 这里要显式切回 map，否则用户会以为"地图没显示"
+    renderer.setMode(state.view === 'graph' ? 'graph' : 'map');
     renderer.setTrace(state.hops, context);
-    if (state.view === 'graph') renderer.setMode('graph');
+    if (state.view === 'graph') renderer.layoutLogical();
     else renderer.fitToNodes();
+    renderer.draw();
   }
 
   function finalizeTrace() {
