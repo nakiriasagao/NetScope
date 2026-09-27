@@ -442,6 +442,9 @@ node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 
 `dist/android/netscope-1.1.0.apk`：
 
+仓库也附带了可直接安装的已签名 APK：[artifacts/netscope-1.1.0.apk](artifacts/netscope-1.1.0.apk)。
+在手机上下载后允许安装来自此来源的应用即可；源码或前端资源有改动时，再按下面的命令重新构建。
+
 - 包名 `com.netscope.app`，最低 Android 5.0（API 21）；
 - 只申请 `INTERNET` 与 `ACCESS_NETWORK_STATE`，**不含**定位 / 存储 / 相机等敏感权限；
 - 使用 Debug 签名（可直接安装；上架应用商店需换成正式签名）。
