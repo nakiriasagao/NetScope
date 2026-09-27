@@ -1587,3 +1587,137 @@ select {
     height: 62vh;
   }
 }
+
+/* Android 手机：保持桌面端深色科技风，同时把三栏控件变成可滚动浮层。 */
+@media (max-width: 600px) {
+  body {
+    overflow: auto;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .topbar {
+    gap: 7px;
+    padding: 8px 10px;
+  }
+
+  .brand {
+    flex: 1 1 100%;
+    gap: 7px;
+  }
+
+  .brand-logo {
+    width: 28px;
+    height: 28px;
+  }
+
+  .brand-text strong {
+    font-size: 16px;
+  }
+
+  .brand-text span {
+    display: none;
+  }
+
+  .target-form {
+    order: 2;
+    flex: 1 1 100%;
+    max-width: none;
+    min-width: 0;
+  }
+
+  #target-input {
+    min-width: 0;
+    font-size: 13px;
+  }
+
+  .topbar-actions {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 1px;
+    gap: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .topbar-actions .btn,
+  .topbar-actions .status-pill {
+    flex: 0 0 auto;
+  }
+
+  .topbar-actions .btn {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .layout {
+    height: auto;
+    min-height: 0;
+  }
+
+  .sidebar.is-open,
+  .inspector.is-open {
+    top: 138px;
+    bottom: 0;
+    width: 100%;
+    max-width: none;
+  }
+
+  .sidebar.is-open {
+    padding: 10px;
+  }
+
+  .map-area {
+    height: calc(100dvh - 138px);
+    min-height: 390px;
+  }
+
+  .map-toolbar {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .map-toolbar-group {
+    gap: 4px;
+  }
+
+  .map-toolbar-right {
+    margin-left: 0;
+  }
+
+  .tool-text {
+    padding: 0 8px;
+    font-size: 11.5px;
+  }
+
+  .toolbar-label,
+  .basemap-status {
+    display: none;
+  }
+
+  .toolbar-select {
+    max-width: 145px;
+  }
+
+  .legend-panel {
+    left: 8px;
+    right: 8px;
+    top: 8px;
+    width: auto;
+    max-height: calc(100% - 16px);
+  }
+
+  .node-card {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-height: 55vh;
+  }
+
+  .toast-stack {
+    left: 8px;
+    right: 8px;
+    top: 146px;
+    max-width: none;
+  }
+}
