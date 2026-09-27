@@ -406,7 +406,7 @@ NetScope/
 
 ```powershell
 node tools/build-exe.js      # → dist/netscope.exe（约 89 MB，自带 Node 运行时）
-node tools/build-apk.js      # → dist/android/netscope-1.0.0.apk（约 16 KB）
+node tools/build-apk.js      # → dist/android/netscope-1.1.0.apk（约 160 KB）
 node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 ```
 
@@ -460,6 +460,7 @@ node tools/build-exe.js && node tools/build-apk.js   # 两个一起做
 | 公网出口 IP + 地理定位 | ✅ |
 | 局域网设备发现 | ✅（Android 10+ 读不到 ARP 表，故无 MAC / 厂商信息） |
 | 路由追踪 | ⚠️ 可确认目标、RTT，以及由回包 TTL 推算的**跳数距离**；**无法显示中间路由器 IP** |
+| 主流程实时进度 | ✅ 兼容桌面端 EventSource 接口，手机端以本机 SSE 响应驱动相同 UI |
 | TLS 证书链检查、多解析器对比 | ❌ 暂未实现（界面会明确提示） |
 
 > **为什么拿不到中间路由器 IP？** Android 应用不能创建原始套接字（需 root），
