@@ -245,6 +245,18 @@ function request(urlPath, method, body) {
       ok('未伪造中间跳地址', noFakeIp);
     }
 
+    console.log('\n--- EventSource 流式兼容（手机端主流程）---');
+    const traceStream = await request('/api/trace/stream?target=127.0.0.1&maxHops=1&queries=1&traceTimeoutMs=300');
+    ok('/api/trace/stream', traceStream.status === 200
+      && /text\/event-stream/i.test(traceStream.headers['content-type'] || '')
+      && /event: done/.test(traceStream.text),
+      traceStream.text.slice(-160).replace(/\n/g, ' '));
+    const diagnoseStream = await request('/api/diagnose/stream?target=127.0.0.1&maxHops=1&queries=1&traceTimeoutMs=300');
+    ok('/api/diagnose/stream', diagnoseStream.status === 200
+      && /text\/event-stream/i.test(diagnoseStream.headers['content-type'] || '')
+      && /event: done/.test(diagnoseStream.text),
+      diagnoseStream.text.slice(-160).replace(/\n/g, ' '));
+
     console.log('\n--- 诊断主流程（前端主入口）---');
     const diag = await request('/api/diagnose', 'POST', { target: '223.5.5.5', maxHops: 6, queries: 1, traceTimeoutMs: 800 });
     const d = diag.json;
