@@ -48,7 +48,7 @@ public final class NetHttpd implements ServerInfo {
         Map<String, Object> handle(String method, String path, Map<String, String> query, String body) throws Exception;
     }
 
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1.0";
 
     private final AssetProvider assets;
     private final ApiHandler api;
@@ -217,11 +217,102 @@ public final class NetHttpd implements ServerInfo {
             return;
         }
 
+        if ("/api/trace/stream".equals(pathOnly) || "/api/diagnose/stream".equals(pathOnly)) {
+            handleStream(pathOnly, query, out);
+            return;
+        }
         if (pathOnly.startsWith("/api/")) {
             handleApi(method, pathOnly, query, body, out);
             return;
         }
         serveAsset(pathOnly, out);
+    }
+
+    /**
+     * 兼容桌面端 EventSource 的流式接口。
+     *
+     * Android 后端的探测在一个工作线程内完成，无法像 Node 版一样逐步
+     * 推送每一跳；这里仍使用同一套同步 API 计算结果，再包装成 start /
+     * progress / done 三个 SSE 事件。这样前端无需为手机端维护第二套主流程，
+     * 同时用户会看到明确的进度状态，而不是连接到一个不存在的接口。
+     */
+    private void handleStream(String streamPath, Map<String, String> query, OutputStream out) {
+        List<String> events = new ArrayList<String>();
+        boolean diagnose = "/api/diagnose/stream".equals(streamPath);
+        String target = query == null ? null : query.get("target");
+        events.add(sseEvent("start", Json.write(map("message", diagnose ? "开始诊断…" : "开始追踪…"))));
+        events.add(sseEvent("progress", Json.write(map("stage", "resolve", "message", "正在解析目标…"))));
+        if (diagnose) {
+            events.add(sseEvent("progress", Json.write(map("stage", "probe", "message", "正在测试连通性…"))));
+        }
+
+        Map<String, Object> result;
+        try {
+            if (target == null || target.length() == 0) {
+                result = map("ok", Boolean.FALSE, "error", "缺少 target 参数");
+            } else {
+                // EventSource 的查询参数本身就是字符串；Json.getInt / getBool
+                // 会按桌面 API 的请求体格式解析它们。
+                result = api.handle("POST", diagnose ? "/api/diagnose" : "/api/trace", query,
+                        Json.write(query));
+            }
+        } catch (Throwable error) {
+            result = map("ok", Boolean.FALSE, "error",
+                    error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+        }
+
+        if (result == null || !Boolean.TRUE.equals(result.get("ok"))) {
+            String message = result == null ? "手机端探测没有返回结果" : String.valueOf(result.get("error"));
+            events.add(sseEvent("error", Json.write(map("error", message))));
+        } else {
+            Object trace = result.get("trace");
+            if (trace instanceof Map) {
+                Object hops = ((Map<?, ?>) trace).get("hops");
+                if (hops instanceof List) {
+                    events.add(sseEvent("progress", Json.write(map("stage", "hops", "hops", hops,
+                            "to", Integer.valueOf(((List<?>) hops).size()),
+                            "total", Integer.valueOf(((List<?>) hops).size()),
+                            "message", "已完成路由追踪"))));
+                }
+            }
+            events.add(sseEvent("progress", Json.write(map("stage", "done", "message", "即将完成"))));
+            String engine = trace instanceof Map && ((Map<?, ?>) trace).get("engine") != null
+                    ? String.valueOf(((Map<?, ?>) trace).get("engine")) : "android-standalone";
+            events.add(sseEvent("done", Json.write(map("result", result, "engine", engine,
+                    "summary", trace instanceof Map ? ((Map<?, ?>) trace).get("summary") : null))));
+        }
+
+        try {
+            byte[] data = joinEvents(events).getBytes("UTF-8");
+            Map<String, String> headers = new LinkedHashMap<String, String>();
+            headers.put("Content-Type", "text/event-stream; charset=utf-8");
+            headers.put("Cache-Control", "no-cache, no-store");
+            writeBytes(out, 200, "OK", data, headers);
+        } catch (Exception ignored) {
+            /* 客户端可能已经关闭 EventSource */
+        }
+    }
+
+    private static String sseEvent(String name, String data) {
+        return "event: " + name + "\n" + "data: " + data + "\n\n";
+    }
+
+    private static String joinEvents(List<String> events) {
+        StringBuilder sb = new StringBuilder();
+        if (events != null) {
+            for (int i = 0; i < events.size(); i += 1) {
+                if (events.get(i) != null) sb.append(events.get(i));
+            }
+        }
+        return sb.toString();
+    }
+
+    private static Map<String, Object> map(Object... kv) {
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        for (int i = 0; i + 1 < kv.length; i += 2) {
+            out.put(String.valueOf(kv[i]), kv[i + 1]);
+        }
+        return out;
     }
 
     private void handleApi(String method, String path, Map<String, String> query, String body, OutputStream out) {
