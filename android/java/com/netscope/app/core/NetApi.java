@@ -41,14 +41,14 @@ public final class NetApi implements NetHttpd.ApiHandler {
         if ("/api/portscan".equals(path)) return portScan(body);
         if ("/api/probe".equals(path)) return probe(body);
         if ("/api/analyze".equals(path)) return analyze(body);
-        if ("/api/amap/config".equals(path)) return amapConfig();
+        if ("/api/amap/config".equals(path)) return amapConfig(query);
         if ("/api/amap/save".equals(path)) return amapSave(body);
+        if ("/api/amap/test".equals(path)) return amapTest(body);
         if ("/api/cancel".equals(path)) return map("ok", Boolean.TRUE, "canceled", Boolean.FALSE,
                 "message", "手机端探测耗时较短，暂不支持中途取消");
         if ("/api/result".equals(path)) return map("ok", Boolean.FALSE, "error", "手机端不保留历史任务结果");
         if ("/api/security".equals(path)) return notSupported("TLS 证书链检查需要 Java 的证书 API，手机端暂未实现。\n可在桌面版使用该功能。");
         if ("/api/dns/compare".equals(path)) return notSupported("多解析器对比需要枚举系统 DNS 之外的公共解析器，手机端暂未实现。");
-        if ("/api/security".equals(path)) return notSupported("暂未实现");
         return notSupported("手机端暂未实现该接口：" + path);
     }
 
@@ -689,14 +689,22 @@ public final class NetApi implements NetHttpd.ApiHandler {
     /* 高德配置（手机端仅保存于内存，供将来扩展）                            */
     /* ------------------------------------------------------------------ */
 
-    private Map<String, Object> amapConfig() {
+    private Map<String, Object> amapConfig(Map<String, String> query) {
         Map<String, Object> m = new LinkedHashMap<String, Object>();
         m.put("ok", Boolean.TRUE);
         Map<String, Object> cfg = new LinkedHashMap<String, Object>();
         cfg.put("configured", Boolean.valueOf(!amapConfig.isEmpty()));
-        cfg.put("enabled", Boolean.valueOf(!amapConfig.isEmpty()));
+        cfg.put("enabled", amapConfig.containsKey("enabled")
+                ? amapConfig.get("enabled") : Boolean.valueOf(!amapConfig.isEmpty()));
         cfg.put("keyMasked", amapConfig.containsKey("key") ? mask(String.valueOf(amapConfig.get("key"))) : null);
         cfg.put("hasSecurity", Boolean.valueOf(amapConfig.containsKey("security")));
+        if (query != null && "1".equals(query.get("includePlain")) && amapConfig.containsKey("key")) {
+            // 仅服务于本机 WebView 的回填；NetHttpd 只绑定 127.0.0.1，
+            // 且默认请求不会返回明文密钥。
+            cfg.put("keyPlain", String.valueOf(amapConfig.get("key")));
+            cfg.put("securityPlain", amapConfig.containsKey("security")
+                    ? String.valueOf(amapConfig.get("security")) : "");
+        }
         m.put("config", cfg);
         m.put("note", "手机端保存的高德 Key 仅存在于内存，重启应用后需重新填写");
         return m;
@@ -705,9 +713,39 @@ public final class NetApi implements NetHttpd.ApiHandler {
     private Map<String, Object> amapSave(String body) {
         String key = Json.getString(body, "key");
         String security = Json.getString(body, "security");
-        if (key != null) amapConfig.put("key", key);
-        if (security != null) amapConfig.put("security", security);
-        return map("ok", Boolean.TRUE, "saved", Boolean.TRUE);
+        if (key != null) amapConfig.put("key", key.trim());
+        if (security != null) amapConfig.put("security", security.trim());
+        String enabled = Json.getString(body, "enabled");
+        if (enabled != null) amapConfig.put("enabled", Boolean.valueOf("true".equalsIgnoreCase(enabled)));
+        return map("ok", Boolean.TRUE, "saved", Boolean.TRUE,
+                "config", amapConfig(new LinkedHashMap<String, String>()).get("config"));
+    }
+
+    /** 高德设置面板的轻量连通性检查（不落盘临时密钥）。 */
+    private Map<String, Object> amapTest(String body) {
+        String key = Json.getString(body, "key");
+        String security = Json.getString(body, "security");
+        List<Object> checks = new ArrayList<Object>();
+        boolean keyOk = key != null && key.matches("[0-9a-fA-F]{32}");
+        checks.add(map("name", "Key 格式", "ok", Boolean.valueOf(keyOk),
+                "detail", keyOk ? "形如 32 位十六进制" : "高德 Key 通常是 32 位十六进制字符"));
+        boolean securityOk = security != null && security.length() > 0;
+        checks.add(map("name", "安全密钥", "ok", Boolean.valueOf(securityOk),
+                "detail", securityOk ? "已填写" : "未填写（新版 Key 可能需要 jscode）"));
+        boolean scriptOk = false;
+        if (keyOk) {
+            // Key 已通过 32 位十六进制校验，不包含需要 URL 编码的字符。
+            String script = httpGetText("https://webapi.amap.com/maps?v=2.0&key=" + key);
+            scriptOk = script != null && script.length() > 0 && script.indexOf("INVALID_USER_KEY") < 0;
+        }
+        checks.add(map("name", "JS API 脚本加载", "ok", Boolean.valueOf(scriptOk),
+                "detail", scriptOk ? "高德脚本可访问" : "无法访问或 Key 被拒绝（网络受限时也会失败）"));
+        Map<String, Object> out = new LinkedHashMap<String, Object>();
+        out.put("ok", Boolean.valueOf(keyOk && scriptOk));
+        out.put("configured", Boolean.valueOf(keyOk));
+        out.put("checks", checks);
+        out.put("message", keyOk && scriptOk ? "高德地图配置可用" : "高德地图配置不可用，请检查 Key 与网络");
+        return out;
     }
 
     /** 供 WebView 注入使用：把高德 Key 下发给前端 */
