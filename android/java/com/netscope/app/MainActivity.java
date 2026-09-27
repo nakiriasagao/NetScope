@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private LinearLayout errorPanel;
     private TextView errorText;
     private String baseUrl;
+    private static volatile String lastServerBaseUrl;
     private volatile boolean pageFailed = false;
 
     @Override
@@ -112,6 +113,7 @@ public class MainActivity extends Activity {
             holder[0] = server;
             server.start(PREFERRED_PORT);
             baseUrl = "http://127.0.0.1:" + server.getPort();
+            lastServerBaseUrl = baseUrl;
             webView.loadUrl(baseUrl + "/");
         } catch (Throwable t) {
             showError("内置服务启动失败：" + t.getMessage()
@@ -289,6 +291,7 @@ public class MainActivity extends Activity {
             server.stop();
             server = null;
         }
+        lastServerBaseUrl = null;
         if (webView != null) {
             webView.destroy();
             webView = null;
@@ -298,7 +301,7 @@ public class MainActivity extends Activity {
 
     /** 供设置页读取当前服务地址 */
     public static String serverBaseUrl() {
-        return null;
+        return lastServerBaseUrl;
     }
 
     /** 预留：把高德凭据注入前端（当前由前端自身保存） */
